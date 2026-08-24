@@ -14,7 +14,7 @@
 import { atom } from 'jotai'
 import { activeViewAtom } from './active-view'
 
-export type SettingsTab = 'profile' | 'general' | 'channels' | 'proxy' | 'runtime' | 'appearance' | 'about' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
+export type SettingsTab = 'profile' | 'general' | 'channels' | 'proxy' | 'runtime' | 'appearance' | 'about' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'voice-input' | 'migration' | 'storage' | 'archived-chats'
 export type ToolSettingsFocus = 'memory' | 'nano-banana' | 'custom-tools'
 
 /** 当前设置标签页（不持久化，每次打开设置默认显示渠道） */

@@ -21,7 +21,6 @@ import {
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
-import { useSmoothStream } from '@proma/ui'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
@@ -29,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { AssistantTurnRenderer, groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, type MessageGroup } from './SDKMessageRenderer'
 import { buildLiveGroupSet } from './live-group-set'
 import { mergePersistedAndLiveMessages } from '@/lib/agent-live-message'
+import { findStreamingFallbackInsertionIndex } from '@/lib/agent-streaming-order'
 import { shouldSuppressAgentRunningIndicator } from '@/lib/agent-running-state'
 import { isTurnStoppedByUser } from '@/lib/agent-turn-presentation'
 import { AgentRunningIndicator } from './AgentRunningIndicator'
@@ -502,18 +502,12 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
   const streamingContent = streamState?.content ?? ''
   const streamingModelId = streamState?.model || sessionModelId
   const retrying = streamState?.retrying
-  const startedAt = streamState?.startedAt
+  const startedAt = streamState?.turnStartedAt ?? streamState?.startedAt
 
-  const { displayedContent: rawSmoothContent } = useSmoothStream({
-    content: streamingContent,
-    isStreaming: streaming,
-  })
-
-  // 防闪屏守卫：useSmoothStream 通过 useEffect 重置 displayedContent，比 render 晚一帧。
-  // 当 streamingContent 已清空但 smoothContent 仍持有旧值时，
-  // 会导致 fallback 气泡与持久化消息同时渲染一帧（重复内容闪烁）。
-  // 用原始 streamingContent 作为守卫：内容已清空且不在流式中，立即归零。
-  const smoothContent = (streaming || streamingContent) ? rawSmoothContent : ''
+  // fallback 只保留一层平滑队列：具体 text/thinking block 统一由
+  // ContentBlock / ThinkingStreamPanel 逐字渲染。这里若再次平滑，
+  // 同一段内容会经过两层队列，造成正文滞后和忽快忽慢。
+  const smoothContent = streamingContent
   const smoothContentBlocks = React.useMemo(() => {
     if (!smoothContent) return []
     return parseThinkTagsFromText(smoothContent)
@@ -583,6 +577,26 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
       const record = message as Record<string, unknown>
       if (typeof record.uuid === 'string' && record.uuid.length > 0) {
         return `${message.type}:uuid:${record.uuid}`
+      }
+      if (message.type === 'user') {
+        const createdAt = typeof record._createdAt === 'number'
+          ? record._createdAt
+          : undefined
+        const content = (record.message as { content?: unknown } | undefined)?.content
+        const text = Array.isArray(content)
+          ? content
+            .filter((block): block is { type: 'text'; text: string } =>
+              typeof block === 'object'
+              && block !== null
+              && (block as { type?: unknown }).type === 'text'
+              && typeof (block as { text?: unknown }).text === 'string',
+            )
+            .map((block) => block.text)
+            .join('\n')
+          : ''
+        if (createdAt != null && text.length > 0) {
+          return `user:created-at:${createdAt}:${text}`
+        }
       }
       if (message.type === 'assistant') {
         const inner = record.message as { id?: unknown } | undefined
@@ -672,9 +686,55 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
   // 流式中：通过 liveGroupSet 精确判断（只有 streaming 时 liveGroupSet 才非空）
   // 流式结束后：直接检查 liveMessages 中是否有助手消息，
   // 防止 streaming→false 到 liveMessages 被清除之间的过渡帧中 fallback 气泡重复渲染
+  const queuedUserGroupIndex = findStreamingFallbackInsertionIndex(visibleGroups, liveMessages ?? [])
   const hasLiveAssistantContent = streaming
-    ? allGroups.some((g) => g.type === 'assistant-turn' && liveGroupSet.has(g))
+    ? visibleGroups.some((group, index) =>
+      group.type === 'assistant-turn'
+      && liveGroupSet.has(group)
+      // 立即发送后，队列用户之前的 assistant 属于上一回合；
+      // 只有新用户之后的 assistant 才能收起新回合占位。
+      && (queuedUserGroupIndex == null || index > queuedUserGroupIndex)
+    )
     : (liveMessages != null && liveMessages.some((m) => (m as { type: string }).type === 'assistant'))
+  const shouldRenderStreamingFallback = !hasLiveAssistantContent
+    && !suppressAgentRunning
+    && (streaming || smoothContent || retrying)
+  const streamingFallbackInsertionIndex = shouldRenderStreamingFallback
+    ? (queuedUserGroupIndex != null ? queuedUserGroupIndex + 1 : visibleGroups.length)
+    : undefined
+  const streamingFallbackNode = shouldRenderStreamingFallback ? (
+    <React.Fragment key={`${sessionId}:streaming-fallback`}>
+      {retrying && (
+        <div className="pl-7">
+          <RetryingNotice retrying={retrying} />
+        </div>
+      )}
+      {smoothFallbackTurn ? (
+        <AssistantTurnRenderer
+          turn={smoothFallbackTurn}
+          allMessages={allSDKMessages}
+          basePath={sessionPath || undefined}
+          isStreaming
+          sessionModelId={streamingModelId}
+          sessionId={sessionId}
+          turnId={`${sessionId}:streaming-fallback`}
+          isLatestAssistantTurn
+          runningStartedAt={startedAt}
+        />
+      ) : (
+        <Message from="assistant">
+          <MessageContent className="pl-0">
+            {streaming && (
+              <AgentRunningIndicator
+                startedAt={startedAt}
+                model={streamingModelId}
+              />
+            )}
+          </MessageContent>
+        </Message>
+      )}
+    </React.Fragment>
+  ) : null
 
   // 用户在模型尚未返回任何内容时暂停：没有 assistant-turn，需要在用户消息后单独补一行停止状态
   // prop 与会话 meta 双通道，避免 atom 尚未同步时历史中断会话漏显示
@@ -686,6 +746,11 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
     && lastUserGroupIndex >= 0
     && lastAssistantGroupIndex < lastUserGroupIndex
   const stoppedDurationMs = React.useMemo(() => {
+    // 用户点击停止时已经冻结的耗时优先级最高。后续 result/meta 可能使用
+    // 不同计时起点返回 duration，不能覆盖停止瞬间已经展示的数值。
+    if (streamState?.stopDurationMs != null && streamState.stopDurationMs >= 0) {
+      return streamState.stopDurationMs
+    }
     if (lastStopDurationMs != null && lastStopDurationMs > 0) return lastStopDurationMs
     // 仅在本轮仍保留流式 startedAt 且尚未完全收尾时用它估算；
     // 不直接 Date.now()-startedAt 作为最终值反复增长，避免停止后耗时跳动。
@@ -748,8 +813,10 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
           ) : (
             <>
               {/* 统一消息渲染（持久化 + 实时合并为一个列表，确保 system 消息位置正确） */}
+              {streamingFallbackInsertionIndex === 0 && streamingFallbackNode}
               {visibleGroups.map((group, idx) => {
                 const isLive = liveGroupSet.has(group)
+                  && (queuedUserGroupIndex == null || group.type !== 'assistant-turn' || idx > queuedUserGroupIndex)
                 const isLatestAssistantTurn = group.type === 'assistant-turn'
                   && idx === visibleGroups.findLastIndex(
                     (candidate) => candidate.type === 'assistant-turn',
@@ -782,45 +849,50 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
                   }
                 }
                 return (
-                  <MessageGroupRenderer
-                    key={getGroupId(group)}
-                    group={group}
-                    allMessages={allSDKMessages}
-                    basePath={sessionPath || undefined}
-                    onFork={shouldDisableActions ? undefined : onFork}
-                    onRewind={shouldDisableActions ? undefined : onRewind}
-                    onRetry={shouldDisableActions ? undefined : onRetry}
-                    onRetryInNewSession={shouldDisableActions ? undefined : onRetryInNewSession}
-                    onCompact={shouldDisableActions ? undefined : onCompact}
-                    isStreaming={isLive || undefined}
-                    stoppedByUser={turnStoppedByUser || undefined}
-                    sessionModelId={sessionModelId}
-                    sessionId={sessionId}
-                    isLatestAssistantTurn={isLatestAssistantTurn}
-                    // 中断后 isLive=false，但仍需 startedAt / duration 才能显示「你在 N 秒后停止了」
-                    runningStartedAt={
-                      isLive || turnStoppedByUser
-                        ? (startedAt ?? (
-                          turnStoppedByUser && turnStopDurationMs != null && turnStopDurationMs >= 0
-                            ? Date.now() - Math.max(turnStopDurationMs, 1)
-                            : undefined
-                        ))
-                        : undefined
-                    }
-                    fallbackDurationMs={turnStoppedByUser ? turnStopDurationMs : undefined}
-                  />
+                  <React.Fragment key={getGroupId(group)}>
+                    {streamingFallbackInsertionIndex === idx && streamingFallbackNode}
+                    <MessageGroupRenderer
+                      group={group}
+                      allMessages={allSDKMessages}
+                      basePath={sessionPath || undefined}
+                      onFork={shouldDisableActions ? undefined : onFork}
+                      onRewind={shouldDisableActions ? undefined : onRewind}
+                      onRetry={shouldDisableActions ? undefined : onRetry}
+                      onRetryInNewSession={shouldDisableActions ? undefined : onRetryInNewSession}
+                      onCompact={shouldDisableActions ? undefined : onCompact}
+                      isStreaming={isLive || undefined}
+                      stoppedByUser={turnStoppedByUser || undefined}
+                      sessionModelId={sessionModelId}
+                      sessionId={sessionId}
+                      isLatestAssistantTurn={isLatestAssistantTurn}
+                      // 中断后 isLive=false，但仍需 startedAt / duration 才能显示「你在 N 秒后停止了」
+                      runningStartedAt={
+                        isLive || turnStoppedByUser
+                          ? (startedAt ?? (
+                            turnStoppedByUser && turnStopDurationMs != null && turnStopDurationMs >= 0
+                              ? Date.now() - Math.max(turnStopDurationMs, 1)
+                              : undefined
+                          ))
+                          : undefined
+                      }
+                      fallbackDurationMs={turnStoppedByUser ? turnStopDurationMs : undefined}
+                    />
+                  </React.Fragment>
                 )
               })}
+              {streamingFallbackInsertionIndex === visibleGroups.length && streamingFallbackNode}
 
               {/* 模型尚未返回内容就被暂停：显示「你在 N 秒后停止了」 */}
               {showStoppedWithoutAssistant && (
-                <div className="pl-0">
-                  <AgentTurnStatusLine
-                    model={sessionModelId}
-                    status="stopped"
-                    durationMs={stoppedDurationMs}
-                  />
-                </div>
+                <Message from="assistant">
+                  <MessageContent className="pl-0">
+                    <AgentTurnStatusLine
+                      model={sessionModelId}
+                      status="stopped"
+                      durationMs={stoppedDurationMs}
+                    />
+                  </MessageContent>
+                </Message>
               )}
 
               {/* 压缩进行中：钉在列表末尾显示 spinner。
@@ -839,41 +911,6 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
                 </div>
               )}
 
-              {/* 无实时 Assistant Turn 时使用相同的单行 Logo/状态或 Logo/正文兜底。 */}
-              {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || smoothContent || retrying) && (
-                <>
-                  {retrying && (
-                    <div className="pl-7">
-                      <RetryingNotice retrying={retrying} />
-                    </div>
-                  )}
-                  {smoothFallbackTurn ? (
-                    <AssistantTurnRenderer
-                      turn={smoothFallbackTurn}
-                      allMessages={allSDKMessages}
-                      basePath={sessionPath || undefined}
-                      isStreaming
-                      sessionModelId={streamingModelId}
-                      sessionId={sessionId}
-                      turnId={`${sessionId}:streaming-fallback`}
-                      isLatestAssistantTurn
-                      runningStartedAt={startedAt}
-                    />
-                  ) : (
-                    <Message from="assistant">
-                      <MessageContent className="pl-0">
-                        {streaming && (
-                          <AgentRunningIndicator
-                            startedAt={startedAt}
-                            model={streamingModelId}
-                          />
-                        )}
-                      </MessageContent>
-                    </Message>
-                  )}
-                </>
-              )}
-
               {/* 暂停后的下一条消息已进入队列：旧 Runtime 收尾期间持续显示处理中，
                   但不把旧流重新标记为 running，避免误走 Runtime 注入通道。 */}
               {waitingForQueuedRun && !streaming && (
@@ -890,7 +927,7 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
             </>
           )}
         </ConversationContent>
-        <ScrollMinimap items={minimapItems} rightOffset={Math.max(0, -contentOffsetX)} />
+        <ScrollMinimap items={minimapItems} />
         {allUserMessagesData.length > 0 && (
           <StickyUserMessage
             userMessages={allUserMessagesData}

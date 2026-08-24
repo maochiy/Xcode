@@ -921,39 +921,43 @@
   }
 }
 
-/* Agent 运行态文字：首次延迟约 600ms，单次扫光约 1 秒，每约 4 秒重复。 */
+/* Agent 运行态文字：高光持续快速扫过，形成清晰的文字波纹。 */
 @keyframes agent-status-shimmer {
-  0%,
-  15% {
-    background-position: 120% 0;
+  0% {
+    background-position: -18px 0;
   }
 
-  40% {
-    background-position: -20% 0;
-  }
-
-  41%,
   100% {
-    background-position: -20% 0;
+    background-position: calc(100% + 18px) 0;
   }
 }
 
 .agent-status-shimmer {
-  /* 文字保持弱化颜色可见，高光在其上方横向扫过 */
   color: hsl(var(--muted-foreground));
+  background-color: hsl(var(--muted-foreground) / 0.72);
   background-image: linear-gradient(
-    100deg,
+    90deg,
     transparent 0%,
-    transparent 38%,
-    hsl(var(--foreground) / 0.55) 50%,
-    transparent 62%,
+    hsl(0 0% 100% / 0.28) 28%,
+    hsl(0 0% 100% / 0.95) 50%,
+    hsl(0 0% 100% / 0.28) 72%,
     transparent 100%
   );
-  background-position: 120% 0;
-  background-size: 220% 100%;
+  background-position: -18px 0;
+  background-size: 18px 100%;
+  background-repeat: no-repeat;
   background-clip: text;
   -webkit-background-clip: text;
-  animation: agent-status-shimmer 4s ease-in-out 600ms infinite;
+  -webkit-text-fill-color: transparent;
+  animation: agent-status-shimmer 1.2s linear infinite;
+}
+
+/*
+ * 「正在思考」存在于顶栏、活动占位和思考流标题多个节点。
+ * 使用更高优先级的完整 animation 覆盖，确保不会继续继承通用的 1.2s 周期。
+ */
+.agent-status-shimmer.agent-thinking-status-shimmer {
+  animation: agent-status-shimmer 2.8s linear infinite;
 }
 
 /* 活动/开局入场：仅淡入，不做 max-height 撑开，避免「正在思考/阶段行」上下跳 */
@@ -1003,10 +1007,34 @@
   animation-fill-mode: backwards;
 }
 
+/* Cursor 风格思考内容：固定滚动布局，避免流式追加时影响外层排版。 */
+.agent-thinking-stream-surface {
+  contain: layout paint;
+}
+
+/*
+ * 思考内容白色遮罩：只要收到思考内容就以 75% 的主题背景色覆盖整个滚动视口；
+ * 最新一行不再例外保留，所有思考内容使用一致的遮罩透明度。
+ * 绝对定位不会参与布局，避免流式追加造成高度跳动。
+ */
+.agent-thinking-stream-top-fade {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0;
+  background: hsl(var(--background) / 0.75);
+}
+
+.agent-thinking-stream-top-fade[data-active="true"] {
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-status-shimmer {
     color: hsl(var(--muted-foreground));
     background: none;
+    -webkit-text-fill-color: currentColor;
     animation: none;
   }
 
@@ -1180,10 +1208,6 @@
   background-color: hsl(var(--tab-surface) / 0.42);
 }
 
-[data-input-mode] > div:first-child {
-  background-color: hsl(var(--input-surface)) !important;
-}
-
 /* 现代界面：保留 rounded-full 的圆形/胶囊语义，只压低卡片、面板、气泡等大圆角。 */
 :root:not(.ui-classic) [class*="rounded-lg"]:not([class*="rounded-full"]),
 :root:not(.ui-classic) [class*="rounded-xl"]:not([class*="rounded-full"]),
@@ -1231,7 +1255,7 @@
   border-color: hsl(var(--border) / 0.5) !important;
 }
 
-.ui-classic [data-input-mode] > div:first-child {
+.ui-classic .input-surface-card {
   background-color: hsl(var(--background) / 0.7) !important;
 }
 
@@ -2316,7 +2340,7 @@ body *::-webkit-scrollbar {
 /* ===== CRT 终端：UI 组件终端化 ===== */
 
 /* 输入框容器：去掉圆角、毛玻璃和半透明背景，改用直角实色背景 + 实线边框 */
-.theme-terminal-dark [data-input-mode] > div:first-child {
+.theme-terminal-dark .input-surface-card {
   border-radius: 0 !important;
   border: 1px solid hsl(var(--border)) !important;
   border-top-width: 1px !important;

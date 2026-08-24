@@ -103,8 +103,6 @@ export function getEffectiveSystemPrompt(promptId?: string): string {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
       weekday: 'long',
     })
     content += `\n\n---\n当前时间: ${dateTime}\n用户名: ${profile.userName}`

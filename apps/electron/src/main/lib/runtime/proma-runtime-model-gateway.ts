@@ -8,7 +8,6 @@
 import type {
   Channel,
   CodexOAuthCredentials,
-  ProviderType,
   RuntimeCapability,
   RuntimeId,
   RuntimeModelRoute,
@@ -23,6 +22,7 @@ import {
 } from '../channel-manager'
 import { buildCcbProviderEnvironment } from '../ccb-runtime/provider-environment'
 import { compactionFor } from './proma-runtime-compaction'
+import { resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
 import { getPromaUserAgent } from '@proma/core'
 import pkg from '../../../../package.json' with { type: 'json' }
 
@@ -39,29 +39,6 @@ export interface ResolveRuntimeModelRouteInput {
   modelId?: string
   runtimeId: RuntimeId
   capabilities?: Partial<Record<RuntimeCapability, 'supported' | 'partial' | 'unsupported' | 'unknown'>>
-}
-
-function apiModeFor(provider: ProviderType): string {
-  if (provider === 'google') return 'google_generative_language'
-  if (
-    provider === 'anthropic'
-    || provider === 'anthropic-compatible'
-    || provider === 'deepseek'
-    || provider === 'minimax'
-    || provider === 'kimi-coding'
-    || provider === 'kimi-api'
-    || provider === 'qwen-anthropic'
-    || provider === 'qwen-token-plan'
-    || provider === 'xiaomi'
-    || provider === 'xiaomi-token-plan'
-    || provider === 'zhipu-coding'
-    || provider === 'zhipu-coding-team'
-    || provider === 'ark-coding-plan'
-  ) {
-    return 'anthropic_messages'
-  }
-  if (provider === 'openai-codex') return 'openai_responses_oauth'
-  return 'openai_responses'
 }
 
 function modelFor(channel: Channel, requestedModelId?: string): string {
@@ -98,7 +75,7 @@ export async function resolvePromaRuntimeModelRoute(
     modelId,
     provider: channel.provider,
     baseUrl: baseUrlFor(channel),
-    apiMode: apiModeFor(channel.provider),
+    apiMode: resolvePromaRuntimeApiMode(channel.provider),
     credentialRevision: `credential:${channel.id}:${channel.updatedAt}`,
     capabilities: input.capabilities || {},
     source: 'proma-channel',
@@ -122,7 +99,7 @@ export async function resolvePromaRuntimeModelRoute(
       PROMA_RUNTIME_MODEL_PROVIDER: channel.provider,
       PROMA_RUNTIME_MODEL_ID: modelId,
       PROMA_RUNTIME_MODEL_BASE_URL: channel.baseUrl,
-      PROMA_RUNTIME_MODEL_API_MODE: apiModeFor(channel.provider),
+      PROMA_RUNTIME_MODEL_API_MODE: resolvePromaRuntimeApiMode(channel.provider),
     },
   }
 }

@@ -3,7 +3,6 @@ import * as SliderPrimitive from '@radix-ui/react-slider'
 import { ChevronDown } from 'lucide-react'
 import type { ThinkingEffortLevel } from '@proma/shared'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import {
   THINKING_EFFORT_LABELS,
@@ -13,9 +12,7 @@ import {
 interface AgentThinkingEffortControlProps {
   capability: AgentThinkingEffortCapability
   value: ThinkingEffortLevel
-  expanded: boolean
   onValueChange: (value: ThinkingEffortLevel) => void
-  onExpandedChange: (expanded: boolean) => void
 }
 
 interface CodexEffortSliderProps {
@@ -86,9 +83,7 @@ function CodexEffortSlider({
 export function AgentThinkingEffortControl({
   capability,
   value,
-  expanded,
   onValueChange,
-  onExpandedChange,
 }: AgentThinkingEffortControlProps): React.ReactElement {
   const selectedIndex = Math.max(0, capability.levels.indexOf(value))
   const [previewIndex, setPreviewIndex] = React.useState(selectedIndex)
@@ -140,14 +135,6 @@ export function AgentThinkingEffortControl({
           />
         </div>
 
-        <div className="mt-2 flex items-center justify-between border-t border-border/50 pt-3">
-          <span className="text-xs text-foreground/65">展开思考过程</span>
-          <Switch
-            checked={expanded}
-            onCheckedChange={onExpandedChange}
-            className="h-4 w-7 [&>span]:size-3 [&>span]:data-[state=checked]:translate-x-3"
-          />
-        </div>
       </PopoverContent>
     </Popover>
   )

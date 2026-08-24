@@ -120,6 +120,7 @@ export function AgentTurnStatusLine({
         ? '执行失败'
         : getAgentTurnStatusLabel(status))
   const tooltip = buildTooltip(model, durationMs, usage)
+  const isThinkingLabel = label.startsWith('正在思考')
   // 规则：处理中/已处理/停止标题后跟一条细分隔线
   const shouldShowDivider = showDivider ?? (
     running
@@ -137,6 +138,7 @@ export function AgentTurnStatusLine({
         'min-w-0 text-[14px] text-muted-foreground whitespace-nowrap',
         label.length > 24 && 'truncate',
         running && 'agent-status-shimmer',
+        running && isThinkingLabel && 'agent-thinking-status-shimmer',
       )}>
         {label}
       </span>

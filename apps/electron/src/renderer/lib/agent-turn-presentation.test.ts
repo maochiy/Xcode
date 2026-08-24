@@ -3,6 +3,7 @@ import type { SDKContentBlock, SDKMessage } from '@proma/shared'
 import type { AssistantTurn } from '@proma/session-core'
 import {
   buildAgentTurnPresentation,
+  dedupeAssistantSnapshotsForPresentation,
   orderAssistantMessagesForPresentation,
   collectPriorFoldableActivities,
   collectPriorToolActivities,
@@ -57,6 +58,133 @@ function createToolResultMessage(input: {
 }
 
 describe('Agent Turn 展示模型', () => {
+  test('Given 立即发送冻结了同一旧回合的累计快照和短快照 When 渲染 Then 只显示完整正文一次', () => {
+    const cumulative = {
+      type: 'assistant' as const,
+      uuid: 'paused-cumulative',
+      parent_tool_use_id: null,
+      message: {
+        id: 'old-message',
+        content: [
+          text('先检查项目，再核对降级条件。'),
+        ],
+      },
+      _promaPausedByUser: true,
+    }
+    const shorter = {
+      type: 'assistant' as const,
+      uuid: 'paused-shorter',
+      parent_tool_use_id: null,
+      message: {
+        id: 'old-message',
+        content: [
+          text('再核对降级条件。'),
+        ],
+      },
+      _promaPausedByUser: true,
+    }
+
+    const deduped = dedupeAssistantSnapshotsForPresentation([cumulative, shorter])
+
+    expect(deduped).toHaveLength(1)
+    expect(deduped[0]?.uuid).toBe('paused-cumulative')
+  })
+
+  test('Given 同一 message id 的 CCB 不同 block When 渲染 Then 不误删不同过程块', () => {
+    const thinkingMessage = {
+      type: 'assistant' as const,
+      uuid: 'thinking-block',
+      parent_tool_use_id: null,
+      message: {
+        id: 'ccb-message',
+        content: [thinking('先分析')],
+      },
+      _partial: true,
+      _partialBlockIndex: 0,
+    }
+    const textMessage = {
+      type: 'assistant' as const,
+      uuid: 'text-block',
+      parent_tool_use_id: null,
+      message: {
+        id: 'ccb-message',
+        content: [text('继续处理')],
+      },
+      _partial: true,
+      _partialBlockIndex: 2,
+    }
+
+    expect(
+      dedupeAssistantSnapshotsForPresentation([thinkingMessage, textMessage]),
+    ).toHaveLength(2)
+  })
+
+  test('Given 同一 block 的 partial 和 final When 渲染 Then final 替换 partial', () => {
+    const partial = {
+      type: 'assistant' as const,
+      uuid: 'partial',
+      parent_tool_use_id: null,
+      message: {
+        id: 'ccb-message-final',
+        content: [text('正在生成')],
+      },
+      _partial: true,
+      _partialBlockIndex: 2,
+    }
+    const final = {
+      type: 'assistant' as const,
+      uuid: 'final',
+      parent_tool_use_id: null,
+      message: {
+        id: 'ccb-message-final',
+        content: [text('正在生成完成')],
+      },
+      _partialBlockIndex: 2,
+    }
+
+    const deduped = dedupeAssistantSnapshotsForPresentation([partial, final])
+
+    expect(deduped).toHaveLength(1)
+    expect(deduped[0]?.uuid).toBe('final')
+  })
+
+  test('Given 立即发送后旧 turn 的不同身份快照重复 When turn 被中断 Then 只保留完整正文', () => {
+    const firstSnapshot = {
+      type: 'assistant' as const,
+      uuid: 'runtime-snapshot',
+      parent_tool_use_id: null,
+      message: {
+        id: 'runtime-message-1',
+        content: [text('先检查项目。接下来核对降级条件。')],
+      },
+    }
+    const secondSnapshot = {
+      type: 'assistant' as const,
+      uuid: 'paused-snapshot',
+      parent_tool_use_id: null,
+      message: {
+        id: 'paused-message-1',
+        content: [text('接下来核对降级条件。')],
+      },
+    }
+    const interrupted = {
+      type: 'result' as const,
+      subtype: 'interrupted',
+      _stoppedByUser: true,
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [firstSnapshot, secondSnapshot],
+      turnMessages: [firstSnapshot, secondSnapshot, interrupted],
+      model: 'claude-sonnet-4',
+    }
+
+    const ordered = orderAssistantMessagesForPresentation(turn)
+
+    expect(ordered).toHaveLength(1)
+    expect(ordered[0]?.uuid).toBe('runtime-snapshot')
+  })
+
   test('Given 纯正文 When 分类 Then 正文与唯一 Logo 同行且没有活动折叠', () => {
     const turn = createTurn([text('最终回答')])
     const presentation = buildAgentTurnPresentation({
@@ -204,6 +332,24 @@ describe('Agent Turn 展示模型', () => {
       type: 'thinking',
       thinking: '正在整理最新结果',
     })
+  })
+
+  test('Given 多段 thinking 被工具调用隔开 When 构建展示 Then 全部原文进入统一思考流', () => {
+    const turn = createTurn([
+      thinking('第一段原始思考。'),
+      tool('read-1', 'Read'),
+      thinking('## 第二段标题\n继续分析 IPC。'),
+    ])
+    const presentation = buildAgentTurnPresentation({
+      id: 'turn-thinking-stream',
+      turn,
+      blocks: turn.assistantMessages[0]!.message.content,
+      isStreaming: true,
+    })
+
+    expect(presentation.thinkingContent).toBe(
+      '第一段原始思考。\n## 第二段标题\n继续分析 IPC。',
+    )
   })
 
   test('Given 最终回答已经开始 When 仍处于流式阶段 Then 活动轨迹默认收起且不残留伪运行项', () => {

@@ -5,7 +5,6 @@
  * 浏览器标注和 Hermes 任务产物，再按 Runtime 投影到不同 Harness。
  */
 
-import { randomUUID } from 'node:crypto'
 import type {
   AgentMessage,
   AgentWorkspace,
@@ -154,7 +153,7 @@ export function compileContextPacket(input: CompileContextPacketInput): ContextP
 
   return {
     schemaVersion: 1,
-    packetId: `context-${randomUUID()}`,
+    packetId: `context-${input.sessionId}`,
     sessionId: input.sessionId,
     workspaceId: input.workspace?.id || null,
     compiledAt: now,

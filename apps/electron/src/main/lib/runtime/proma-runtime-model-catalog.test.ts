@@ -15,7 +15,7 @@ describe('Proma Runtime 模型中心路由契约', () => {
       model: 'gpt-test',
       models: ['gpt-test'],
       baseUrl: 'https://provider.test/v1',
-      apiMode: 'openai_responses',
+      apiMode: 'openai_chat_completions',
       hasApiKey: true,
       oauthAccountId: '',
       runtimeRevision: 'revision-a',

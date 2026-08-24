@@ -8,6 +8,15 @@
 import type { BrowserAnnotation } from './browser'
 import type { HarnessId, RuntimeCapability, RuntimeId } from './runtime'
 
+/** Proma 模型中心可选择并传递给 Runtime 的标准供应商协议。 */
+export type PromaRuntimeApiMode =
+  | 'anthropic_messages'
+  | 'openai_chat_completions'
+  | 'openai_responses'
+  | 'openai_responses_oauth'
+  | 'google_generative_language'
+  | 'legacy-compat'
+
 export type RuntimeTaskKind =
   | 'conversation'
   | 'clarification'
@@ -127,7 +136,7 @@ export interface RuntimeModelRoute {
   modelId: string
   provider: string
   baseUrl: string
-  apiMode: string
+  apiMode: PromaRuntimeApiMode
   credentialRevision: string
   capabilities: Partial<Record<RuntimeCapability, 'supported' | 'partial' | 'unsupported' | 'unknown'>>
   source: 'proma-channel' | 'legacy-compat'

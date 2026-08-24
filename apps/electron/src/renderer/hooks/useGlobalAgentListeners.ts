@@ -492,28 +492,45 @@ export function useGlobalAgentListeners(): void {
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
     /** 正在执行的 Shell 工具：toolUseId → sessionId（完成后刷新改动统计和 Diff）。 */
     const pendingShellTools = new Map<string, string>()
+    interface PendingLiveMessage {
+      message: SDKMessage
+      runStartedAt?: number
+    }
     /** 待合帧的实时 SDK 消息，按 session 隔离，确保后台会话不会阻塞当前会话。 */
-    const pendingLiveMessages = new Map<string, SDKMessage[]>()
-    const liveMessageFlushTimers = new Map<string, number>()
+    const pendingLiveMessages = new Map<string, PendingLiveMessage[]>()
+    const liveMessageFlushFrames = new Map<string, number>()
 
     /**
      * 将一个 session 的实时消息一次性写入 atom。
      * 合帧只延迟渲染，不改变消息到达顺序；完成/错误/卸载前会主动 flush。
      */
     const flushLiveMessages = (sessionId: string): void => {
-      const timer = liveMessageFlushTimers.get(sessionId)
-      if (timer !== undefined) {
-        window.clearTimeout(timer)
-        liveMessageFlushTimers.delete(sessionId)
+      const frame = liveMessageFlushFrames.get(sessionId)
+      if (frame !== undefined) {
+        window.cancelAnimationFrame(frame)
+        liveMessageFlushFrames.delete(sessionId)
       }
 
       const pending = pendingLiveMessages.get(sessionId)
       if (!pending || pending.length === 0) return
       pendingLiveMessages.delete(sessionId)
 
+      // 合帧期间可能跨过“立即发送”切换点：旧 Runtime 的消息进入
+      // pending 后，新回合已经建立。此时不能再把旧快照写回 live。
+      const currentStartedAt = store.get(agentStreamingStatesAtom).get(sessionId)?.startedAt
+      const currentPending = pending.filter((entry) =>
+        entry.runStartedAt == null
+        || currentStartedAt == null
+        || entry.runStartedAt >= currentStartedAt,
+      )
+      if (currentPending.length === 0) return
+
       store.set(liveMessagesMapAtom, (prev) => {
         const current = prev.get(sessionId) ?? []
-        const next = mergeAgentLiveMessages(current, pending)
+        const next = mergeAgentLiveMessages(
+          current,
+          currentPending.map((entry) => entry.message),
+        )
         if (next === current) return prev
         const map = new Map(prev)
         map.set(sessionId, next)
@@ -522,14 +539,14 @@ export function useGlobalAgentListeners(): void {
     }
 
     const scheduleLiveMessageFlush = (sessionId: string): void => {
-      if (liveMessageFlushTimers.has(sessionId)) return
-      const timer = window.setTimeout(() => {
-        liveMessageFlushTimers.delete(sessionId)
+      if (liveMessageFlushFrames.has(sessionId)) return
+      const frame = window.requestAnimationFrame(() => {
+        liveMessageFlushFrames.delete(sessionId)
         unstable_batchedUpdates(() => {
           flushLiveMessages(sessionId)
         })
-      }, 32)
-      liveMessageFlushTimers.set(sessionId, timer)
+      })
+      liveMessageFlushFrames.set(sessionId, frame)
     }
 
     const flushAllLiveMessages = (): void => {
@@ -830,6 +847,17 @@ export function useGlobalAgentListeners(): void {
 
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
+        const currentStartedAt = store.get(agentStreamingStatesAtom).get(sessionId)?.startedAt
+        // “立即发送”会先在 Renderer 展示新回合，再等待旧 Runtime 收尾。
+        // 旧 Runtime 的尾部事件仍可能晚到；按 runStartedAt 丢弃它们，
+        // 防止旧正文/工具状态写进新回合。
+        if (
+          payload.runStartedAt != null
+          && currentStartedAt != null
+          && payload.runStartedAt < currentStartedAt
+        ) {
+          return
+        }
 
         if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started') {
           activateExternalAgentRun(payload.event)
@@ -920,7 +948,10 @@ export function useGlobalAgentListeners(): void {
             }
 
             const pending = pendingLiveMessages.get(sessionId) ?? []
-            pending.push(payload.message)
+            pending.push({
+              message: payload.message,
+              runStartedAt: payload.runStartedAt,
+            })
             pendingLiveMessages.set(sessionId, pending)
             scheduleLiveMessageFlush(sessionId)
           }
@@ -1212,7 +1243,7 @@ export function useGlobalAgentListeners(): void {
       (data: AgentStreamCompletePayload) => {
         console.log(`[FLASH-DEBUG] STREAM_COMPLETE for session=${data.sessionId.slice(0, 8)}, stoppedByUser=${data.stoppedByUser}, resultSubtype=${data.resultSubtype}`)
         unstable_batchedUpdates(() => {
-        // 完成事件可能早于最后一个 32ms 合帧定时器，先收尾实时消息再刷新持久化投影。
+        // 完成事件可能早于最后一个逐帧刷新回调，先收尾实时消息再刷新持久化投影。
         flushLiveMessages(data.sessionId)
         // 后台任务等待态：turn 主体结束但仍有后台任务在飞行，UI 进入"空闲可输入"。
         // 不发"任务已完成"通知（任务并未真正完成）、不清后台任务列表、不重载消息——
@@ -1323,7 +1354,10 @@ export function useGlobalAgentListeners(): void {
         }
 
         // 标记用户主动打断状态，并立刻写入耗时，避免等 listAgentSessions 才显示「你在 N 秒后停止了」
-        if (data.stoppedByUser) {
+        // 旧回合在新回合已经启动后才到达 complete 时，不能把新回合
+        // 再标记成 stoppedByUser；否则新消息虽然在运行，旧暂停状态仍会
+        // 把旧内容/停止文案覆盖到新回合上。
+        if (data.stoppedByUser && isCurrentCompletion) {
           store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
             const next = new Set(prev)
             next.add(data.sessionId)
@@ -1562,10 +1596,10 @@ export function useGlobalAgentListeners(): void {
 
     return () => {
       flushAllLiveMessages()
-      for (const timer of liveMessageFlushTimers.values()) {
-        window.clearTimeout(timer)
+      for (const frame of liveMessageFlushFrames.values()) {
+        window.cancelAnimationFrame(frame)
       }
-      liveMessageFlushTimers.clear()
+      liveMessageFlushFrames.clear()
       cleanupEvent()
       cleanupComplete()
       cleanupError()

@@ -35,7 +35,9 @@ export { groupIntoTurns, getGroupPreview, extractUserText } from '@proma/session
 export type { MessageGroup, AssistantTurn } from '@proma/session-core'
 import { AgentTurnActivityGroup } from './AgentTurnActivityGroup'
 import { AgentTurnActivityList } from './AgentTurnActivityList'
+import { AgentToolCallShelf } from './AgentToolCallShelf'
 import { AgentModelLogo, AgentTurnStatusLine } from './AgentTurnStatusLine'
+import { ThinkingStreamPanel } from './ThinkingStreamPanel'
 import { ProposedPlanCard } from './ProposedPlanCard'
 import {
   Message,
@@ -92,8 +94,6 @@ import {
 import type { ToolActivity } from '@/atoms/agent-atoms'
 import {
   buildAgentTurnPresentation,
-  collectPriorFoldableActivities,
-  collectPriorToolActivities,
   isTurnStoppedByUser,
   orderAssistantMessagesForPresentation,
 } from '@/lib/agent-turn-presentation'
@@ -625,20 +625,32 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   const isCollapsedActivitySurface = !fullTranscript && (
     isLiveActivityPhase || isUserStoppedTurn
   )
-  const foldableActivities = presentation.activities.filter((item) => item.foldable)
+  const displayActivities = presentation.activities.filter(
+    (item) => item.block.type !== 'thinking' && item.block.type !== 'tool_use',
+  )
+  const visibleDisplayActivities = presentation.visibleActivities.filter(
+    (item) => item.block.type !== 'thinking' && item.block.type !== 'tool_use',
+  )
+  const toolActivities = presentation.activities.filter(
+    (item) => (
+      item.block.type === 'tool_use'
+      && !TASK_TOOL_NAMES.has((item.block as SDKToolUseBlock).name)
+    ),
+  )
+  const foldableActivities = displayActivities.filter((item) => item.foldable)
   const hiddenCollapsedFoldableActivities = isCollapsedActivitySurface
     ? foldableActivities.filter(
-        (item) => !presentation.visibleActivities.some(
+        (item) => !visibleDisplayActivities.some(
           (visibleItem) => visibleItem.index === item.index,
         ),
       )
     : []
   // 运行中：默认折叠，仅当存在被隐藏的历史可折叠活动时允许展开
   // 用户停止：可折叠查看完整轨迹，默认仍收起（与运行中一致）
-  // 正常完成带正文时整轮活动区会隐藏；失败/无正文完成仍可折叠查看过程
+  // thinking 与工具都有独立展示区域；整轮状态区只承载过程正文，
+  // 因此不能再因为存在历史工具而显示一个展开后为空的折叠箭头。
   const canToggleActivities = !fullTranscript && (
-    presentation.collapsePolicy.collapsible
-    || (isCollapsedActivitySurface && hiddenCollapsedFoldableActivities.length > 0)
+    (isCollapsedActivitySurface && hiddenCollapsedFoldableActivities.length > 0)
     || (
       !isCollapsedActivitySurface
       && foldableActivities.length > 0
@@ -696,6 +708,27 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
   // isActivelyStreaming 需要在 enrichedBlocks 空检查之前定义，否则 TDZ 导致 return null
   const isActivelyStreaming = isTurnExecuting && !!isStreaming && !turnStoppedByUser
+  const hasVisibleText = topLevelBlocks.some(
+    (block) => (
+      block.type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string'
+      && ((block as { text: string }).text.trim().length > 0)
+    ),
+  )
+  const hasTerminalResult = turn.turnMessages.some(
+    (message) => message.type === 'result',
+  )
+  // 流式正文的首个 text delta 既可能是过程说明，也可能只是最终回答的开头，
+  // 不能据此提前隐藏思考与工具区域。以 Runtime 的 result 终态作为唯一收尾信号：
+  // 终态到达前持续展示，终态到达后同一渲染帧隐藏。
+  const showTransientActivity = (isActivelyStreaming || hasRunningSubagent)
+    && (!hasTerminalResult || hasRunningSubagent)
+  const showThinkingStream = showTransientActivity
+    && (
+      presentation.thinkingContent.trim().length > 0
+      || !hasVisibleText
+    )
+  const showToolShelf = showTransientActivity && toolActivities.length > 0
   // 流式执行中即使还没有 block（首个 SSE 未到达），也要显示"正在思考"占位
   // 用户中断且没有任何 assistant 内容时，仍需要显示"你在 N秒后停止了"状态行（规则文档第 8/14 节）
   const isStoppedWithoutContent = enrichedBlocks.length === 0
@@ -714,14 +747,9 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       leadingModel?: string
       activityRunning?: boolean
       activityItem?: boolean
-      /** 思考展开时附带历史活动 */
-      priorActivities?: typeof presentation.activities
+      priorActivityNodes?: React.ReactNode
     },
   ): React.ReactNode => {
-    // 思考块传入 Turn 级别耗时，用于显示"已思考 N 秒"
-    const thinkingDurationMs = block.type === 'thinking'
-      ? presentation.durationMs
-      : undefined
     // 任务进度由底部浮层统一呈现，输出记录不再重复显示任务卡。
     if (block.type === 'tool_use' && TASK_TOOL_NAMES.has((block as SDKToolUseBlock).name)) {
       return null
@@ -731,16 +759,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       && ((block as { name: string }).name === 'Agent' || (block as { name: string }).name === 'Task')
     const childBlocks = isAgentTool
       ? childBlocksMap.get((block as { id: string }).id)
-      : undefined
-
-    const priorActivities = options?.priorActivities ?? []
-    const priorActivityNodes = priorActivities.length > 0
-      ? priorActivities.map((item) =>
-          renderTopLevelBlock(item.block, item.index, {
-            activityRunning: false,
-            activityItem: true,
-          }),
-        )
       : undefined
 
     return (
@@ -767,18 +785,16 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         leadingModel={options?.leadingModel}
         activityRunning={options?.activityRunning}
         activityItem={options?.activityItem}
-        thinkingDurationMs={thinkingDurationMs}
-        priorActivityNodes={priorActivityNodes}
-        hasPriorActivities={priorActivities.length > 0}
+        priorActivityNodes={options?.priorActivityNodes}
       />
     )
  }
   // 用户约定时序（产品规则优先；codex.text 只参考运行中视觉动效）：
   // 1) 开局：顶栏 +「正在思考」（无正文无箭头，无思考图标）
-  // 2) 思考有正文：默认仍收起，仅右侧箭头；点开用高度/透明度动画（不自动展开、不整行跳）
-  // 3) 过程正文：替换「正在思考」；多条换行追加，不把旧正文隐藏
-  // 4) 工具：最新一条替换思考；≥2 条可展开历史
-  // 5) 正常结束有正文：只留正文；暂停：你在 N 秒后停止了
+  // 2) 思考有正文：固定高度面板位于当前过程内容下方，持续追加并自动跟随
+  // 3) 过程正文：多条换行追加，不把旧正文隐藏
+  // 4) 工具：工具活动独立展示，不混入思考面板
+  // 5) 本轮 result 终态到达前思考流持续位于正文下方；终态到达后隐藏
   const isNormallyCompletedWithAnswer = !isLiveActivityPhase
     && !isUserStoppedTurn
     && !fullTranscript
@@ -796,13 +812,13 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   // 收起：折叠内为空；下方直接用 visibleActivities
   // （过程正文固定追加 + 阶段行时间序穿插；暂停后过程正文也保留）
   const foldedDetailActivities = expanded || !isCollapsedActivitySurface
-    ? presentation.activities
+    ? displayActivities
     : []
   // 收起表面：不再因 finalAnswerStarted 清空——流式/暂停时过程正文必须继续固定露出
   const liveCollapsedActivities = (
     isCollapsedActivitySurface && !expanded
   )
-    ? presentation.visibleActivities
+    ? visibleDisplayActivities
     : []
   // <1s 顶栏「正在思考」仅在还没有可展示的过程/阶段内容时使用；
   // 已有过程正文或工具/最终正文时不要再用顶栏「正在思考」造成“没被替换”的错觉。
@@ -877,38 +893,30 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
             <div className="ml-7">
               <AgentTurnActivityList
                 items={liveCollapsedActivities}
-                renderItem={(item) => {
-                  const priorActivities = item.block.type === 'thinking'
-                    ? collectPriorFoldableActivities(presentation.activities, item)
-                    : item.block.type === 'tool_use'
-                      ? collectPriorToolActivities(presentation.activities, item)
-                      : undefined
-                  return renderTopLevelBlock(item.block, item.index, {
+                renderItem={(item) =>
+                  renderTopLevelBlock(item.block, item.index, {
                     // 停止后强制非 running，文案从「正在思考」变为已完成态
                     activityRunning: isUserStoppedTurn ? false : item.running,
                     activityItem: true,
-                    priorActivities,
                   })
-                }}
+                }
               />
             </div>
           )}
-          {/* 兜底：流式中仍无 visibleActivities 时，强制挂「正在思考」占位（无折叠箭头） */}
-          {isActivelyStreaming
-            && !isUserStoppedTurn
-            && presentation.finalItems.length === 0
-            && !hideFinalItems
-            && liveCollapsedActivities.length === 0
-            && !expanded && (
-            <div className="ml-7">
-              {renderTopLevelBlock(
-                { type: 'thinking', thinking: '' } as SDKContentBlock,
-                -1,
-                { activityRunning: true, activityItem: true },
-              )}
-            </div>
+          {/* 运行期间只露最新工具；其箭头展开历史。终态到达后与思考面板一起隐藏。 */}
+          {showToolShelf && (
+            <AgentToolCallShelf
+              items={toolActivities}
+              renderItem={(item, placement, historyNodes) =>
+                renderTopLevelBlock(item.block, item.index, {
+                  activityRunning: placement === 'latest' ? item.running : false,
+                  activityItem: true,
+                  priorActivityNodes: historyNodes,
+                })
+              }
+            />
           )}
-         {!hideFinalItems && presentation.finalItems.length > 0 && (
+          {!hideFinalItems && presentation.finalItems.length > 0 && (
             <div className={cn(
               'grid grid-cols-[20px_minmax(0,1fr)] gap-x-2',
               // 仅当活动摘要行仍展示时，正文缩进到 logo 列右侧；正常结束后活动行消失，正文恢复 logo+内容
@@ -936,6 +944,14 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 })}
               </div>
             </div>
+          )}
+          {/* Cursor 风格：本轮运行期间思考流持续位于过程/正文下方，整轮结束后自动隐藏。 */}
+          {showThinkingStream && (
+            <ThinkingStreamPanel
+              content={presentation.thinkingContent}
+              running
+              className="ml-7"
+            />
           )}
         </div>
         {/* 如果有错误但也有内容块，在末尾以 tail 形式挂错误横幅附错误提示 + 重试按钮，保留正文本身的 markdown 排版 */}
@@ -1033,8 +1049,9 @@ export function SDKMessageRenderer({
     }
 
     const model = aMsg._channelModelId || aMsg.message?.model || sessionModelId
+    const displayBlocks = blocks.filter((block) => block.type !== 'thinking')
     // 检测是否有主要内容（text 块）
-    const hasTextContent = blocks.some(
+    const hasTextContent = displayBlocks.some(
       (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
     )
 
@@ -1044,7 +1061,7 @@ export function SDKMessageRenderer({
           <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-2">
             {showHeader && <AgentModelLogo model={model} className="mt-0.5" />}
             <div className={cn('space-y-2', !showHeader && 'col-span-2')}>
-            {blocks.map((block, i) => (
+            {displayBlocks.map((block, i) => (
               <ContentBlock
                 key={i}
                 block={block}

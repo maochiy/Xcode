@@ -14,7 +14,7 @@ import {
 import { AssistantTurnRenderer } from './SDKMessageRenderer'
 
 describe('AssistantTurnRenderer 流式活动折叠', () => {
-  test('Given 多条 stop_reason=tool_use 的思考和过程文本 When 流式渲染 Then 旧活动收起且只显示最新过程', () => {
+  test('Given 多条 stop_reason=tool_use 的思考和过程文本 When 最新正文仍在流式渲染 Then 思考面板持续显示在正文下方', () => {
     const firstThinking: SDKAssistantMessage = {
       type: 'assistant',
       uuid: 'thinking-1',
@@ -94,20 +94,21 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
     expect(html).toContain('已处理')
     expect(html).toContain('现在看 IPC 桥接、preload 和 App 路由。')
     expect(html).toContain('主源码目录确实有登录相关实现')
-    // 正文替换思考后，下方新增「正在思考」
-    // 旧思考摘要只在新思考折叠的 prior 里（收起 DOM 仍可能存在），不作为独立表面行
+    // 本轮尚未结束：正文继续渲染时，已有思考内容仍固定显示在正文下方。
     expect(html).toContain('正在思考')
     expect(html).not.toContain('已完成思考')
-    // 两段过程正文 + 一行新的正在思考（prior 内的历史思考另算 data-agent-activity）
+    expect(html).toContain('先搜索登录入口。')
+    expect(html).toContain('继续检查 IPC 和 preload。')
+    expect(html.match(/data-thinking-scroll-viewport="true"/g)?.length).toBe(1)
+    // 两段过程正文仍固定露出。
     const surfaceProcessCount = (html.match(/data-agent-activity="process-text"/g) ?? []).length
     expect(surfaceProcessCount).toBe(2)
     const firstProcess = html.indexOf('主源码目录确实有登录相关实现')
     const secondProcess = html.indexOf('现在看 IPC 桥接、preload 和 App 路由。')
-    // 标题「正在思考」在过程正文之后
-    const thinkingTitleIdx = html.indexOf('>正在思考<')
+    const thinkingPanelIdx = html.indexOf('data-thinking-stream="true"')
     expect(firstProcess).toBeGreaterThanOrEqual(0)
     expect(secondProcess).toBeGreaterThan(firstProcess)
-    expect(thinkingTitleIdx).toBeGreaterThan(secondProcess)
+    expect(thinkingPanelIdx).toBeGreaterThan(secondProcess)
   })
 
   test('Given 父流已结束但子智能体仍运行 When 渲染最新 Turn Then 只展示最新子智能体活动且不伪造已处理顶栏', () => {
@@ -139,10 +140,19 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
         content: blocks,
       },
     }
+    const parentResult = {
+      type: 'result' as const,
+      subtype: 'success',
+      result: '',
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+      },
+    }
     const turn: AssistantTurn = {
       type: 'assistant-turn',
       assistantMessages: [assistantMessage],
-      turnMessages: [assistantMessage],
+      turnMessages: [assistantMessage, parentResult],
       model: 'gpt-5.6-sol',
     }
     const store = createStore()
@@ -170,7 +180,7 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
       <Provider store={store}>
         <AssistantTurnRenderer
           turn={turn}
-          allMessages={[assistantMessage]}
+          allMessages={[assistantMessage, parentResult]}
           sessionId="parent-session"
           turnId="turn-1"
           isLatestAssistantTurn
@@ -217,7 +227,7 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
     expect(html).toContain('data-agent-activity="thinking"')
   })
 
-  test('Given 正常结束且已有最终正文 When 渲染 Then 不显示已处理只显示正文', () => {
+  test('Given 正常结束且已有最终正文 When 渲染 Then 正文保留且思考面板自动隐藏', () => {
     const thinkingMsg: SDKAssistantMessage = {
       type: 'assistant',
       uuid: 'thinking-done',
@@ -268,7 +278,447 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
     expect(html).toContain('这是最终回答正文。')
     expect(html).not.toContain('已处理')
     expect(html).not.toContain('已经分析完成')
-    expect(html).not.toContain('已完成思考')
+    expect(html).not.toContain('data-thinking-scroll-viewport="true"')
+  })
+
+  test('Given 第一行正文已经出现但本轮尚未结束 When 流式渲染 Then 思考内容仍显示在正文下方', () => {
+    const thinkingMsg: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'thinking-before-final-stream',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'thinking',
+          thinking: '正在整理最终结论。',
+        }],
+      },
+    }
+    const answerMsg: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'answer-still-streaming',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'text',
+          text: '这是正在流式生成的最终正文。',
+        }],
+      },
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [thinkingMsg, answerMsg],
+      turnMessages: [thinkingMsg, answerMsg],
+      model: 'claude-sonnet-4',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={[thinkingMsg, answerMsg]}
+          sessionId="final-stream-session"
+          turnId="final-stream-turn"
+          isStreaming
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('这是正在流式生成的最终正文。')
+    expect(html).toContain('data-thinking-stream="true"')
+    expect(html).toContain('正在整理最终结论。')
+    expect(html.indexOf('data-thinking-stream="true"')).toBeGreaterThan(
+      html.indexOf('这是正在流式生成的最终正文。'),
+    )
+  })
+
+  test('Given Runtime 终态 result 已到但全局 streaming 标记尚未清理 When 渲染过渡帧 Then 立即隐藏思考面板', () => {
+    const thinkingMsg: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'thinking-before-terminal-result',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'thinking',
+          thinking: '终态前的思考内容。',
+        }],
+      },
+    }
+    const resultMsg = {
+      type: 'result' as const,
+      subtype: 'success',
+      result: '',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 2,
+      },
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [thinkingMsg],
+      turnMessages: [thinkingMsg, resultMsg],
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={[thinkingMsg, resultMsg]}
+          sessionId="terminal-transition-session"
+          turnId="terminal-transition-turn"
+          isStreaming
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).not.toContain('data-thinking-stream="true"')
+    expect(html).not.toContain('终态前的思考内容。')
+  })
+
+  test('Given 后续轮次先收到空 assistant 再收到 Pi 正文分段 When 尚无终态 result Then 思考面板继续显示', () => {
+    const emptyAssistant: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'second-turn-empty-assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [],
+      },
+    }
+    const finalSegment: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'second-turn-pi-final-segment',
+      parent_tool_use_id: null,
+      _partial: true,
+      message: {
+        id: 'pi-second-turn-final-segment',
+        content: [
+          {
+            type: 'thinking',
+            thinking: '确认身份约束后直接回答。',
+          },
+          {
+            type: 'text',
+            text: '我是 Proma。',
+          },
+        ],
+      },
+    } as SDKAssistantMessage
+    const assistantMessages = [emptyAssistant, finalSegment]
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages,
+      turnMessages: assistantMessages,
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={assistantMessages}
+          sessionId="second-turn-session"
+          turnId="second-turn"
+          isStreaming
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('我是 Proma。')
+    expect(html).toContain('data-thinking-stream="true"')
+    expect(html).toContain('确认身份约束后直接回答。')
+  })
+
+  test('Given 本轮已经正常结束且包含多个工具 When 最终正文显示 Then 工具调用和思考内容一样自动隐藏', () => {
+    const firstTool: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'persistent-tool-1',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'persistent-read',
+          name: 'Read',
+          input: { file_path: '/tmp/first.ts' },
+        }],
+      },
+    }
+    const secondTool: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'persistent-tool-2',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'persistent-bash',
+          name: 'Bash',
+          input: { command: 'bun test' },
+        }],
+      },
+    }
+    const firstResult = {
+      type: 'user' as const,
+      uuid: 'persistent-result-1',
+      message: {
+        content: [{
+          type: 'tool_result' as const,
+          tool_use_id: 'persistent-read',
+          content: 'file content',
+        }],
+      },
+    }
+    const secondResult = {
+      type: 'user' as const,
+      uuid: 'persistent-result-2',
+      message: {
+        content: [{
+          type: 'tool_result' as const,
+          tool_use_id: 'persistent-bash',
+          content: '2 pass',
+        }],
+      },
+    }
+    const answer: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'persistent-answer',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'text', text: '工具检查已经完成。' }],
+      },
+    }
+    const result = {
+      type: 'result' as const,
+      subtype: 'success',
+      result: '工具检查已经完成。',
+      _durationMs: 4_000,
+    }
+    const assistantMessages = [firstTool, secondTool, answer]
+    const turnMessages = [
+      firstTool,
+      firstResult,
+      secondTool,
+      secondResult,
+      answer,
+      result,
+    ]
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages,
+      turnMessages,
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={turnMessages}
+          sessionId="persistent-tools-session"
+          turnId="persistent-tools-turn"
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('工具检查已经完成。')
+    expect(html).not.toContain('data-agent-tool-shelf="true"')
+    expect(html).not.toContain('data-agent-tool-latest="true"')
+  })
+
+  test('Given 工具前过程正文已固化且工具后 Pi 正文分段开始 When 仍在流式渲染 Then 工具和思考面板继续显示到终态', () => {
+    const processSegment: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'process-segment-before-tool',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'text', text: '先检查项目结构。' }],
+      },
+    }
+    const toolMessage: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'tool-between-segments',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'tool-between-segments-id',
+          name: 'Read',
+          input: { file_path: '/tmp/project.ts' },
+        }],
+      },
+    }
+    const toolResult = {
+      type: 'user' as const,
+      uuid: 'tool-between-segments-result',
+      message: {
+        content: [{
+          type: 'tool_result' as const,
+          tool_use_id: 'tool-between-segments-id',
+          content: 'project content',
+        }],
+      },
+    }
+    const finalSegment: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'final-segment-after-tool',
+      parent_tool_use_id: null,
+      _partial: true,
+      message: {
+        content: [
+          { type: 'thinking', thinking: '整理最终结论。' },
+          { type: 'text', text: '这是工具执行后的最终正文。' },
+        ],
+      },
+    } as SDKAssistantMessage
+    const assistantMessages = [processSegment, toolMessage, finalSegment]
+    const turnMessages = [
+      processSegment,
+      toolMessage,
+      toolResult,
+      finalSegment,
+    ]
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages,
+      turnMessages,
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={turnMessages}
+          sessionId="segmented-pi-session"
+          turnId="segmented-pi-turn"
+          isStreaming
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('这是工具执行后的最终正文。')
+    expect(html).toContain('data-agent-tool-shelf="true"')
+    expect(html).toContain('data-thinking-stream="true"')
+    expect(html).toContain('整理最终结论。')
+  })
+
+  test('Given 本轮运行中连续调用多个工具 When 最新工具到达 Then 只显示最新工具并由其折叠箭头承载历史', () => {
+    const firstTool: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'live-tool-1',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'live-read',
+          name: 'Read',
+          input: { file_path: '/tmp/first-tool.ts' },
+        }],
+      },
+    }
+    const secondTool: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'live-tool-2',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'live-grep',
+          name: 'Grep',
+          input: { pattern: 'latest-tool-marker' },
+        }],
+      },
+    }
+    const assistantMessages = [firstTool, secondTool]
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages,
+      turnMessages: assistantMessages,
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={assistantMessages}
+          sessionId="live-tools-session"
+          turnId="live-tools-turn"
+          isStreaming
+          isLatestAssistantTurn
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('data-agent-tool-shelf="true"')
+    expect(html).toContain('data-agent-tool-latest="true"')
+    expect(html).toContain('data-agent-tool-history-count="1"')
+    expect(html).toContain('data-collapse-chevron="right"')
+    expect(html).not.toContain('工具调用')
+    expect(html.match(/data-agent-activity="tool"/g)?.length).toBe(1)
+  })
+
+  test('Given 工具前后存在多段 thinking When 流式渲染 Then 同一阴影面板按顺序显示全部内容', () => {
+    const firstThinking: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'stream-thinking-1',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'thinking', thinking: '第一段思考内容。' }],
+      },
+    }
+    const toolMessage: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'stream-tool-1',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'stream-tool-call-1',
+          name: 'Read',
+          input: { file_path: '/tmp/demo.ts' },
+        }],
+      },
+    }
+    const secondThinking: SDKAssistantMessage = {
+      type: 'assistant',
+      uuid: 'stream-thinking-2',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'thinking', thinking: '第二段思考内容。' }],
+      },
+    }
+    const assistantMessages = [firstThinking, toolMessage, secondThinking]
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages,
+      turnMessages: assistantMessages,
+      model: 'grok-4.5',
+    }
+
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <AssistantTurnRenderer
+          turn={turn}
+          allMessages={assistantMessages}
+          sessionId="thinking-stream-session"
+          turnId="thinking-stream-turn"
+          isStreaming
+          isLatestAssistantTurn
+          runningStartedAt={Date.now() - 6_000}
+        />
+      </Provider>,
+    )
+
+    expect(html.match(/data-thinking-scroll-viewport="true"/g)?.length).toBe(1)
+    expect(html).toContain('第一段思考内容。')
+    expect(html).toContain('第二段思考内容。')
+    expect(html.indexOf('第一段思考内容。')).toBeLessThan(
+      html.indexOf('第二段思考内容。'),
+    )
   })
 
   test('Given collaboration 委派工具已返回但子会话仍运行 When 父流结束 Then 委派活动继续作为当前最新活动显示', () => {
@@ -452,8 +902,8 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
     const secondIdx = html.indexOf('第二段固定穿插说明')
     expect(firstIdx).toBeGreaterThanOrEqual(0)
     expect(secondIdx).toBeGreaterThan(firstIdx)
-    // 两条过程正文 + 停止后的思考阶段行
-    expect(html.match(/data-agent-activity=/g)?.length).toBe(3)
+    // 停止后思考面板自动隐藏，只保留两条过程正文。
+    expect(html.match(/data-agent-activity=/g)?.length).toBe(2)
   })
 
   test('Given 用户停止且已有思考与工具 When 渲染 Then 显示停止文案且默认只露最新一行', () => {
@@ -524,8 +974,9 @@ describe('AssistantTurnRenderer 流式活动折叠', () => {
     expect(html).toContain('后停止了')
     // 收起态只露最新一行（过程叙述是最后一条活动）
     expect(html).toContain('已创建探索子智能体')
-    // 旧思考/工具不堆叠显示
+    // 停止后思考面板自动隐藏；旧工具仍不在收起表面堆叠。
     expect(html).not.toContain('先搜索再读取')
+    expect(html).not.toContain('data-thinking-scroll-viewport="true"')
     expect(html).not.toContain('已完成思考')
   })
 })

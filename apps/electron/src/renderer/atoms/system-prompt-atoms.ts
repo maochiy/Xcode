@@ -64,8 +64,6 @@ export const resolvedSystemMessageAtom = atom<string | undefined>((get) => {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
       weekday: 'long',
     })
     const appendix = `\n\n---\n当前时间: ${dateTimeStr}\n用户名: ${userProfile.userName}`
@@ -97,8 +95,6 @@ export function resolveSystemMessage(
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
       weekday: 'long',
     })
     message += `\n\n---\n当前时间: ${dateTimeStr}\n用户名: ${userName}`

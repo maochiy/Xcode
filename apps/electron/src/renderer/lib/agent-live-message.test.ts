@@ -3,8 +3,11 @@ import type { SDKMessage } from '@proma/shared'
 import {
   getAssistantModelMessageId,
   hasUnpersistedLiveAssistantNarrative,
+  hasUnpersistedPausedAgentContent,
+  markPausedAgentMessages,
   mergeAgentLiveMessages,
   mergePersistedAndLiveMessages,
+  preservePausedAgentContent,
   upsertAgentLiveMessage,
 } from './agent-live-message'
 
@@ -204,10 +207,83 @@ describe('Agent 实时消息合并', () => {
 
     expect(result).toBe(before)
   })
+
+  test('Given assistant partial 已在新用户消息之前 When final 快照补到 Then 保留原始时间位置', () => {
+    const partial = assistant('partial', 'msg-order', {
+      type: 'text',
+      text: '旧回复中',
+    }, true)
+    ;(partial as Record<string, unknown>)._createdAt = 100
+    const final = assistant('final', 'msg-order', {
+      type: 'text',
+      text: '旧回复完成',
+    })
+    const merged = upsertAgentLiveMessage([partial], final)
+
+    expect((merged[0] as Record<string, unknown>)._createdAt).toBe(100)
+    expect(merged[0]).toMatchObject({
+      uuid: 'final',
+      message: { content: [{ type: 'text', text: '旧回复完成' }] },
+    })
+  })
+
+  test('Given 旧 assistant 已冻结且 Runtime 复用 UUID When 新回合消息到达 Then 新回合消息仍单独显示', () => {
+    const paused = assistant('same-uuid', 'same-model-message', {
+      type: 'text',
+      text: '旧回合内容',
+    })
+    ;(paused as Record<string, unknown>)._promaPausedByUser = true
+    ;(paused as Record<string, unknown>)._partial = false
+    const next = upsertAgentLiveMessage(
+      [paused],
+      assistant('same-uuid', 'same-model-message', {
+        type: 'text',
+        text: '新回合内容',
+      }),
+    )
+
+    expect(next).toHaveLength(2)
+    expect(next.map((message) => JSON.stringify(message))).toEqual([
+      JSON.stringify(paused),
+      JSON.stringify(assistant('same-uuid', 'same-model-message', {
+        type: 'text',
+        text: '新回合内容',
+      })),
+    ])
+  })
 })
 
 
 describe('mergePersistedAndLiveMessages 暂停后继续对话顺序', () => {
+  test('Given 持久化顺序被立即发送竞态打乱 When 合并 Then 旧 assistant 仍位于新 user 之前', () => {
+    const user1 = {
+      type: 'user',
+      uuid: 'u1',
+      message: { content: [{ type: 'text', text: '第一轮' }] },
+      _createdAt: 1000,
+    } as SDKMessage
+    const user2 = {
+      type: 'user',
+      uuid: 'u2',
+      message: { content: [{ type: 'text', text: '立即发送' }] },
+      _createdAt: 3000,
+    } as SDKMessage
+    const assistant1 = {
+      type: 'assistant',
+      uuid: 'a1',
+      message: {
+        id: 'm1',
+        content: [{ type: 'text', text: '第一轮完整回复' }],
+      },
+      _createdAt: 2000,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([user1, user2, assistant1], [])
+
+    expect(merged.map((item) => (item as { uuid?: string }).uuid))
+      .toEqual(['u1', 'a1', 'u2'])
+  })
+
   test('Given 第一轮 assistant 仅在 live 且第二轮 user 已持久化 When 合并 Then assistant 仍在第一轮 user 之后', () => {
     const user1 = {
       type: 'user',
@@ -252,6 +328,113 @@ describe('mergePersistedAndLiveMessages 暂停后继续对话顺序', () => {
     const merged = mergePersistedAndLiveMessages([assistant], [{ ...assistant }])
     expect(merged).toHaveLength(1)
   })
+
+  test('Given renderer 乐观 user 与主进程落盘 user 没有 uuid 但共享 startedAt When 合并 Then 用户消息只显示一次', () => {
+    const optimistic = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '你是什么模型' }] },
+      parent_tool_use_id: null,
+      _createdAt: 3000,
+      _promaQueuedDuringStreaming: true,
+    } as SDKMessage
+    const persisted = {
+      type: 'user',
+      message: { content: [{ type: 'text', text: '你是什么模型' }] },
+      parent_tool_use_id: null,
+      _createdAt: 3000,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages(
+      [persisted],
+      [optimistic],
+    )
+
+    expect(merged).toHaveLength(1)
+    expect((merged[0] as Record<string, unknown>)._createdAt).toBe(3000)
+  })
+
+  test('Given 暂停快照与 JSONL 中的旧 assistant 文本相同 When 合并 Then 不显示重复旧内容', () => {
+    const persisted = {
+      type: 'assistant',
+      uuid: 'runtime-old',
+      message: {
+        id: 'runtime-message-old',
+        content: [{ type: 'text', text: '旧回合完整回复' }],
+      },
+      _createdAt: 1200,
+    } as SDKMessage
+    const paused = {
+      type: 'assistant',
+      uuid: 'session:paused-stream:1000',
+      message: {
+        id: 'session:paused-stream:1000',
+        content: [{ type: 'text', text: '旧回合完整回复' }],
+      },
+      _createdAt: 1000,
+      _promaPausedByUser: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([persisted], [paused])
+
+    expect(merged).toHaveLength(1)
+    expect((merged[0] as Record<string, unknown>).uuid).toBe('runtime-old')
+  })
+
+  test('Given JSONL 只有更完整的旧回复 When 合并暂停中的部分快照 Then 使用更完整内容且不重复', () => {
+    const persisted = {
+      type: 'assistant',
+      uuid: 'runtime-old-full',
+      message: {
+        id: 'runtime-message-old-full',
+        content: [{ type: 'text', text: '旧回合已显示的内容，后续完整内容' }],
+      },
+      _createdAt: 1200,
+    } as SDKMessage
+    const paused = {
+      type: 'assistant',
+      uuid: 'session:paused-stream:1001',
+      message: {
+        id: 'session:paused-stream:1001',
+        content: [{ type: 'text', text: '旧回合已显示的内容' }],
+      },
+      _createdAt: 1000,
+      _promaPausedByUser: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([persisted], [paused])
+
+    expect(merged).toHaveLength(1)
+    expect(JSON.stringify(merged[0])).toContain('后续完整内容')
+  })
+
+  test('Given 暂停前 live 同时存在累计快照和增量快照 When 合并 Then 只保留内容更完整的一份', () => {
+    const partial = {
+      type: 'assistant',
+      uuid: 'partial-old',
+      message: {
+        id: 'partial-message-old',
+        content: [{ type: 'text', text: '接下来会核对降级条件' }],
+      },
+      _createdAt: 1100,
+      _promaPausedByUser: true,
+    } as SDKMessage
+    const cumulative = {
+      type: 'assistant',
+      uuid: 'cumulative-old',
+      message: {
+        id: 'cumulative-message-old',
+        content: [{ type: 'text', text: '先检查项目，再接下来会核对降级条件' }],
+      },
+      _createdAt: 1000,
+      _promaPausedByUser: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([], [partial, cumulative])
+
+    expect(merged).toHaveLength(1)
+    expect(JSON.stringify(merged[0])).toContain('先检查项目')
+    expect(JSON.stringify(merged[0])).not.toContain('"uuid":"partial-old"')
+  })
 })
 
 describe('hasUnpersistedLiveAssistantNarrative', () => {
@@ -273,5 +456,96 @@ describe('hasUnpersistedLiveAssistantNarrative', () => {
       assistant('disk-text', 'msg-1', { type: 'text', text: '我先看项目结构' }),
     ]
     expect(hasUnpersistedLiveAssistantNarrative(live, persisted)).toBe(false)
+  })
+})
+
+describe('立即发送时固化旧回合正文', () => {
+  test('Given 旧正文只存在 streamState.content When 启动新回合 Then 旧正文保留为暂停快照且新正文独立', () => {
+    const paused = preservePausedAgentContent(
+      [],
+      '旧回合已经输出的内容',
+      'session-1',
+      100,
+      'model-old',
+    )
+    const nextUser = {
+      type: 'user',
+      uuid: 'user-2',
+      message: { content: [{ type: 'text', text: '新问题' }] },
+      _createdAt: 200,
+    } as SDKMessage
+    const newAssistant = assistant(
+      'assistant-2',
+      'model-message-2',
+      { type: 'text', text: '新回合只回答新问题' },
+    )
+
+    const messages = [...paused, nextUser, newAssistant]
+    expect((messages[0] as Record<string, unknown>)._promaPausedByUser).toBe(true)
+    expect(messages[0]).toMatchObject({
+      message: { content: [{ type: 'text', text: '旧回合已经输出的内容' }] },
+    })
+    expect(messages[2]).toMatchObject({
+      message: { content: [{ type: 'text', text: '新回合只回答新问题' }] },
+    })
+    expect(JSON.stringify(messages[2])).not.toContain('旧回合已经输出的内容')
+  })
+
+  test('Given 旧 assistant 已在 live 中 When 暂停旧回合 Then 原消息被标记为暂停且不被新回合清理', () => {
+    const oldAssistant = assistant(
+      'assistant-old',
+      'model-message-old',
+      { type: 'text', text: '旧回合已显示的内容' },
+      true,
+    )
+    ;(oldAssistant as Record<string, unknown>)._createdAt = 200
+    const preserved = preservePausedAgentContent(
+      [oldAssistant],
+      '旧回合已显示的内容',
+      'session-2',
+      100,
+      'model-old',
+    )
+
+    expect(preserved[0]).toMatchObject({
+      _promaPausedByUser: true,
+      message: { content: [{ type: 'text', text: '旧回合已显示的内容' }] },
+    })
+    expect(hasUnpersistedPausedAgentContent(preserved, [])).toBe(true)
+    expect(hasUnpersistedPausedAgentContent(preserved, preserved)).toBe(false)
+  })
+
+  test('Given 旧正文只通过 sdk_message 进入 live When 立即发送 Then 旧 assistant 快照被冻结为独立内容', () => {
+    const oldAssistant = assistant(
+      'assistant-live-only',
+      'model-message-live-only',
+      { type: 'text', text: '只存在实时消息里的旧内容' },
+      true,
+    )
+    const paused = markPausedAgentMessages([oldAssistant])
+
+    expect(paused[0]).toMatchObject({
+      _partial: false,
+      _promaPausedByUser: true,
+    })
+    expect(hasUnpersistedPausedAgentContent(paused, [])).toBe(true)
+  })
+
+  test('Given live 没有旧消息时间戳 When 固化旧正文 Then 快照排在 live 中已有消息之后', () => {
+    const oldUser = {
+      type: 'user',
+      uuid: 'user-old',
+      message: { content: [{ type: 'text', text: '旧问题' }] },
+      _createdAt: 100,
+    } as SDKMessage
+    const preserved = preservePausedAgentContent(
+      [oldUser],
+      '旧回合正文',
+      'session-3',
+      50,
+      'model-old',
+    )
+
+    expect((preserved[1] as Record<string, unknown>)._createdAt).toBe(101)
   })
 })

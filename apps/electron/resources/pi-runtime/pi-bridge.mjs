@@ -28,7 +28,7 @@ function piWorkerStartupError(message, code = 'PI_WORKER_STARTUP_FAILED') {
   return Object.assign(new Error(message), { code });
 }
 
-export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'pi-worker.mjs'), env = {}, runtimeBinding = null, toolHandler, credentialHandler }) {
+export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'pi-worker.mjs'), env = {}, runtimeBinding = null, toolHandler }) {
   const emitter = new EventEmitter();
   const pending = new Map();
   let child = null;
@@ -58,12 +58,6 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
       Promise.resolve(toolHandler?.(message.name, message.params || {}, message.context || {}))
         .then((result) => child?.send({ type: 'tool.response', requestId: message.requestId, result }))
         .catch((error) => child?.send({ type: 'tool.response', requestId: message.requestId, error: error.message || String(error) }));
-      return;
-    }
-    if (message?.type === 'credential.request') {
-      Promise.resolve(credentialHandler?.(message.operation, message.providerId, message.credential, message.accountId || ''))
-        .then((credential) => child?.send({ type: 'credential.response', requestId: message.requestId, credential }))
-        .catch((error) => child?.send({ type: 'credential.response', requestId: message.requestId, error: error.message || String(error) }));
       return;
     }
     const item = pending.get(message?.requestId);
@@ -154,7 +148,11 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
       return request('run.cancel', { sessionId });
     },
     async compact(sessionId, input = {}) {
-      return request('session.compact', { sessionId, instructions: input.instructions || '' }, 120000);
+      return request('session.compact', {
+        sessionId,
+        instructions: input.instructions || '',
+        completeRun: input.completeRun === true,
+      }, 120000);
     },
     async disposeSession(sessionId) {
       return request('session.dispose', { sessionId });
@@ -180,22 +178,103 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
   };
 }
 
-export function createPiBridgePool({ bindingResolver, bridgeFactory = createPiBridge, env = {}, toolHandler, credentialHandler } = {}) {
+export function createPiBridgePool({
+  bindingResolver,
+  bridgeFactory = createPiBridge,
+  env = {},
+  toolHandler,
+  sessionIdleTtlMs = 15 * 60 * 1000,
+  maxIdleSessionsPerBuild = 8,
+  workerIdleTtlMs = 60 * 1000,
+  now = () => Date.now(),
+  setTimer = (callback, delay) => setTimeout(callback, delay),
+  clearTimer = (timer) => clearTimeout(timer),
+} = {}) {
   const emitter = new EventEmitter();
   const bridges = new Map();
-  const sessionBuilds = new Map();
+  const sessions = new Map();
   const runBuilds = new Map();
+  const runSessions = new Map();
   const runEventSequences = new Map();
+  let closed = false;
 
   async function resolveBinding(input = {}) {
     return input.runtimeBinding || bindingResolver?.(input) || null;
   }
 
+  function clearSessionTimer(entry) {
+    if (!entry?.idleTimer) return;
+    clearTimer(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+
+  function clearWorkerTimer(entry) {
+    if (!entry?.idleTimer) return;
+    clearTimer(entry.idleTimer);
+    entry.idleTimer = null;
+  }
+
+  function scheduleWorkerClose(buildId) {
+    const entry = bridges.get(buildId);
+    if (!entry || entry.sessions.size > 0 || entry.idleTimer || closed) return;
+    entry.idleTimer = setTimer(() => {
+      entry.idleTimer = null;
+      if (entry.sessions.size > 0 || bridges.get(buildId) !== entry) return;
+      bridges.delete(buildId);
+      void entry.bridge.close().catch(() => {});
+    }, workerIdleTtlMs);
+  }
+
+  async function disposeSessionInternal(sessionId) {
+    const key = String(sessionId || '');
+    const entry = sessions.get(key);
+    if (!entry) return;
+    clearSessionTimer(entry);
+    sessions.delete(key);
+    const bridgeEntry = bridges.get(entry.buildId);
+    bridgeEntry?.sessions.delete(key);
+    await bridgeEntry?.bridge.disposeSession(key).catch(() => {});
+    // 回收请求等待 Worker 响应期间，同 ID Session 可能已经重新建立。
+    // 仅当当前仍无该 Session 时通知宿主清理 MCP 上下文，避免 ABA 误删新会话。
+    if (!sessions.has(key)) {
+      emitter.emit('sessionDisposed', { sessionId: key, runtimeBinding: bridgeEntry?.binding || null });
+    }
+    scheduleWorkerClose(entry.buildId);
+  }
+
+  function enforceIdleLimit(buildId) {
+    const idle = Array.from(sessions.entries())
+      .filter(([, entry]) => entry.buildId === buildId && entry.activeRuns.size === 0 && entry.idleSince != null)
+      .sort((left, right) => left[1].idleSince - right[1].idleSince);
+    for (const [sessionId] of idle.slice(0, Math.max(0, idle.length - maxIdleSessionsPerBuild))) {
+      void disposeSessionInternal(sessionId);
+    }
+  }
+
+  function markSessionIdle(sessionId, runId) {
+    const entry = sessions.get(sessionId);
+    if (!entry) return;
+    entry.activeRuns.delete(runId);
+    if (entry.activeRuns.size > 0) return;
+    entry.idleSince = now();
+    clearSessionTimer(entry);
+    entry.idleTimer = setTimer(() => {
+      const current = sessions.get(sessionId);
+      if (!current || current.activeRuns.size > 0) return;
+      void disposeSessionInternal(sessionId);
+    }, sessionIdleTtlMs);
+    enforceIdleLimit(entry.buildId);
+  }
+
   function bridgeFor(binding) {
     const buildId = String(binding?.runtimeBuildId || 'bundled');
-    let bridge = bridges.get(buildId);
-    if (bridge) return bridge;
-    bridge = bridgeFactory({ runtimeBinding: binding, env, toolHandler, credentialHandler });
+    let entry = bridges.get(buildId);
+    if (entry) {
+      clearWorkerTimer(entry);
+      return entry.bridge;
+    }
+    const bridge = bridgeFactory({ runtimeBinding: binding, env, toolHandler });
+    entry = { bridge, binding, sessions: new Set(), idleTimer: null };
     bridge.on('event', (message) => {
       const runId = String(message?.runId || '');
       const nativeSequence = Number(runEventSequences.get(runId) || 0) + 1;
@@ -205,17 +284,44 @@ export function createPiBridgePool({ bindingResolver, bridgeFactory = createPiBr
         event: { ...(message.event || {}), nativeSequence, nativeEventKey: `pi:${binding.runtimeBuildId}:${runId}:${nativeSequence}` },
         runtimeBinding: binding,
       });
-      if (['run.completed', 'run.failed', 'run.cancelled'].includes(message?.event?.type)) runEventSequences.delete(runId);
+      if (['run.completed', 'run.failed', 'run.cancelled'].includes(message?.event?.type)) {
+        runEventSequences.delete(runId);
+        const sessionId = runSessions.get(runId);
+        if (sessionId) markSessionIdle(sessionId, runId);
+        runSessions.delete(runId);
+        runBuilds.delete(runId);
+      }
     });
-    bridge.on('exit', (error) => emitter.emit('exit', { error, runtimeBinding: binding }));
-    bridges.set(buildId, bridge);
+    bridge.on('exit', (error) => {
+      const current = bridges.get(buildId);
+      if (current?.bridge === bridge) {
+        clearWorkerTimer(current);
+        bridges.delete(buildId);
+        for (const sessionId of current.sessions) {
+          const session = sessions.get(sessionId);
+          if (session?.buildId === buildId) {
+            clearSessionTimer(session);
+            sessions.delete(sessionId);
+            emitter.emit('sessionDisposed', { sessionId, runtimeBinding: binding });
+          }
+        }
+        for (const [runId, runBuildId] of runBuilds) {
+          if (runBuildId !== buildId) continue;
+          runBuilds.delete(runId);
+          runSessions.delete(runId);
+          runEventSequences.delete(runId);
+        }
+      }
+      emitter.emit('exit', { error, runtimeBinding: binding });
+    });
+    bridges.set(buildId, entry);
     return bridge;
   }
 
   async function bridgeForSession(sessionId) {
-    const buildId = sessionBuilds.get(String(sessionId || ''));
-    if (!buildId) return null;
-    return bridges.get(buildId) || null;
+    const session = sessions.get(String(sessionId || ''));
+    if (!session) return null;
+    return bridges.get(session.buildId)?.bridge || null;
   }
 
   return {
@@ -225,16 +331,46 @@ export function createPiBridgePool({ bindingResolver, bridgeFactory = createPiBr
       const binding = await resolveBinding(input);
       if (!binding) return { status: 'unsupported', capability: 'probe' };
       const ready = await bridgeFor(binding).inspect();
+      scheduleWorkerClose(String(binding.runtimeBuildId || 'bundled'));
       return { status: 'ready', ...ready, runtimeBinding: binding };
     },
     async startRun(payload) {
+      if (closed) throw new Error('Pi Bridge Pool 已关闭。');
       const binding = await resolveBinding(payload);
       if (!binding) throw new Error('Pi Runtime binding is unavailable.');
+      const sessionId = String(payload.sessionId || '');
+      const runId = String(payload.runId || '');
+      const buildId = String(binding.runtimeBuildId || 'bundled');
+      const previous = sessions.get(sessionId);
+      if (previous && previous.buildId !== buildId) {
+        await disposeSessionInternal(sessionId);
+      }
       const bridge = bridgeFor(binding);
-      const accepted = await bridge.startRun({ ...payload, runtimeBinding: binding });
-      sessionBuilds.set(String(payload.sessionId || ''), binding.runtimeBuildId);
-      runBuilds.set(String(payload.runId || ''), binding.runtimeBuildId);
-      return { ...accepted, runtimeVersion: binding.runtimeVersion, runtimeBuildId: binding.runtimeBuildId };
+      let session = sessions.get(sessionId);
+      if (!session) {
+        session = {
+          buildId,
+          activeRuns: new Set(),
+          idleSince: null,
+          idleTimer: null,
+        };
+        sessions.set(sessionId, session);
+        bridges.get(buildId)?.sessions.add(sessionId);
+      }
+      clearSessionTimer(session);
+      session.idleSince = null;
+      session.activeRuns.add(runId);
+      runBuilds.set(runId, buildId);
+      runSessions.set(runId, sessionId);
+      try {
+        const accepted = await bridge.startRun({ ...payload, runtimeBinding: binding });
+        return { ...accepted, runtimeVersion: binding.runtimeVersion, runtimeBuildId: binding.runtimeBuildId };
+      } catch (error) {
+        runBuilds.delete(runId);
+        runSessions.delete(runId);
+        await disposeSessionInternal(sessionId);
+        throw error;
+      }
     },
     async steer(sessionId, message) {
       const bridge = await bridgeForSession(sessionId);
@@ -256,21 +392,24 @@ export function createPiBridgePool({ bindingResolver, bridgeFactory = createPiBr
     },
     async disposeSession(sessionId) {
       const key = String(sessionId || '');
-      const bridge = await bridgeForSession(key);
-      if (bridge) await bridge.disposeSession(key);
-      sessionBuilds.delete(key);
+      await disposeSessionInternal(key);
       return { ok: true };
     },
     async inspect(input = {}) {
       return this.probe(input);
     },
     async close() {
-      await Promise.all(Array.from(bridges.values(), (bridge) => bridge.close().catch(() => {})));
+      closed = true;
+      for (const session of sessions.values()) clearSessionTimer(session);
+      for (const entry of bridges.values()) clearWorkerTimer(entry);
+      await Promise.all(Array.from(bridges.values(), (entry) => entry.bridge.close().catch(() => {})));
       bridges.clear();
-      sessionBuilds.clear();
+      sessions.clear();
       runBuilds.clear();
+      runSessions.clear();
       runEventSequences.clear();
     },
     bridgeCount() { return bridges.size; },
+    sessionCount() { return sessions.size; },
   };
 }

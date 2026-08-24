@@ -8,32 +8,9 @@
 import type {
   ModelCenterModel,
   ModelCenterStatus,
-  ProviderType,
 } from '@proma/shared'
 import { listChannels, resolveChannelRuntimeApiKey } from '../channel-manager'
-
-function apiModeFor(provider: ProviderType): string {
-  if (provider === 'google') return 'google_generative_language'
-  if (
-    provider === 'anthropic'
-    || provider === 'anthropic-compatible'
-    || provider === 'deepseek'
-    || provider === 'minimax'
-    || provider === 'kimi-coding'
-    || provider === 'kimi-api'
-    || provider === 'qwen-anthropic'
-    || provider === 'qwen-token-plan'
-    || provider === 'xiaomi'
-    || provider === 'xiaomi-token-plan'
-    || provider === 'zhipu-coding'
-    || provider === 'zhipu-coding-team'
-    || provider === 'ark-coding-plan'
-  ) {
-    return 'anthropic_messages'
-  }
-  if (provider === 'openai-codex') return 'openai_responses_oauth'
-  return 'openai_responses'
-}
+import { resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
 
 async function hasUsableCredential(channelId: string): Promise<boolean> {
   try {
@@ -80,7 +57,7 @@ export async function getPromaRuntimeModelCatalogStatus(): Promise<ModelCenterSt
         : modelIds[0]!,
       models: modelIds,
       baseUrl: channel.baseUrl,
-      apiMode: apiModeFor(channel.provider),
+      apiMode: resolvePromaRuntimeApiMode(channel.provider),
       hasApiKey: usableByChannel.get(channel.id) === true,
       oauthAccountId: '',
       runtimeRevision: `proma-channel:${channel.id}:${channel.updatedAt}`,

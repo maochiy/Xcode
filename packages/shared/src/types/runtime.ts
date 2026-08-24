@@ -3,6 +3,8 @@
  * 用于 Electron 应用的运行时环境检测和状态管理
  */
 
+import type { PromaRuntimeApiMode } from './runtime-dispatch'
+
 /**
  * 支持的操作系统平台
  */
@@ -181,7 +183,7 @@ export interface ModelCenterModel {
   model: string
   models: string[]
   baseUrl: string
-  apiMode: string
+  apiMode: PromaRuntimeApiMode
   hasApiKey: boolean
   oauthAccountId: string
   runtimeRevision: string

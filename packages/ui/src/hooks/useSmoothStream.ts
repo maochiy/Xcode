@@ -22,6 +22,13 @@ interface UseSmoothStreamOptions {
   isStreaming: boolean
   /** 每帧最小间隔（ms），默认 10 */
   minDelay?: number
+  /**
+   * 每个渲染帧最多追加多少个字素。
+   *
+   * 不传时沿用动态追赶策略；传 1 时就是稳定的逐字打字效果，
+   * 不会因为某个 SSE chunk 较大而一帧突然出现一整段。
+   */
+  maxCharsPerFrame?: number
 }
 
 interface UseSmoothStreamReturn {
@@ -47,6 +54,22 @@ export function shouldScheduleSmoothStreamFrame(
   return pendingCharacterCount > 0 && !hasScheduledFrame
 }
 
+/** 计算当前帧应该追加的字素数，并在需要时限制单帧突发量。 */
+export function resolveSmoothStreamCharacterCount(
+  pendingCharacterCount: number,
+  streamDone: boolean,
+  maxCharsPerFrame?: number,
+): number {
+  if (pendingCharacterCount <= 0) return 0
+
+  const divisor = streamDone ? 4 : 8
+  const dynamicCount = Math.max(1, Math.floor(pendingCharacterCount / divisor))
+  if (maxCharsPerFrame == null) return dynamicCount
+
+  const normalizedMax = Math.max(1, Math.floor(maxCharsPerFrame))
+  return Math.min(dynamicCount, normalizedMax)
+}
+
 /**
  * 流式文本平滑渲染 Hook
  *
@@ -67,6 +90,7 @@ export function useSmoothStream({
   content,
   isStreaming,
   minDelay = 10,
+  maxCharsPerFrame,
 }: UseSmoothStreamOptions): UseSmoothStreamReturn {
   const [displayedContent, setDisplayedContent] = useState(content)
 
@@ -112,10 +136,12 @@ export function useSmoothStream({
     }
     lastRenderTimeRef.current = currentTime
 
-    // 动态计算本帧渲染字符数：除数越大缓冲越深、输出越匀
-    // 流式中 /8 保持较深缓冲（牺牲少许延迟换取丝滑），结束后 /4 加速排空
-    const divisor = streamDoneRef.current ? 4 : 8
-    const count = Math.max(1, Math.floor(queue.length / divisor))
+    // 默认仍允许动态追赶；需要严格打字效果的调用方可把单帧上限设为 1。
+    const count = resolveSmoothStreamCharacterCount(
+      queue.length,
+      streamDoneRef.current,
+      maxCharsPerFrame,
+    )
 
     // 取出字符并更新
     const chars = queue.splice(0, count)
@@ -132,7 +158,7 @@ export function useSmoothStream({
         setDisplayedContent(displayedRef.current)
       }
     }
-  }, [minDelay])
+  }, [maxCharsPerFrame, minDelay])
 
   const scheduleRenderLoop = useCallback(() => {
     if (!shouldScheduleSmoothStreamFrame(

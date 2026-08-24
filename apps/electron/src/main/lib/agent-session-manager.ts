@@ -501,6 +501,44 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
 }
 
 /**
+ * 修复 JSONL 追加写入造成的时间顺序倒置。
+ *
+ * 「立即发送」会先把新的 user 写入 JSONL，旧 Runtime 的 assistant 最终快照
+ * 可能稍后才到达并追加到文件尾部。文件物理顺序因此可能变成：
+ *   旧 user → 新 user → 旧 assistant
+ *
+ * 这里只重排带 `_createdAt` 的消息槽位，未带时间戳的旧历史仍保持原位置，
+ * 避免迁移旧数据时把无法判断先后的消息错误挪动。
+ */
+export function orderSDKMessagesByCreatedAt(messages: SDKMessage[]): SDKMessage[] {
+  const timestamped = messages
+    .filter((message) => typeof (message as Record<string, unknown>)._createdAt === 'number')
+
+  if (timestamped.length < 2) return messages
+
+  const isChronological = timestamped.every((message, index) => {
+    if (index === 0) return true
+    const previous = timestamped[index - 1] as Record<string, unknown>
+    const current = message as Record<string, unknown>
+    return Number(previous._createdAt) <= Number(current._createdAt)
+  })
+  if (isChronological) return messages
+
+  const ordered = [...timestamped].sort((left, right) => {
+    const leftAt = Number((left as Record<string, unknown>)._createdAt)
+    const rightAt = Number((right as Record<string, unknown>)._createdAt)
+    return leftAt - rightAt
+  })
+  let orderedIndex = 0
+  return messages.map((message) => {
+    if (typeof (message as Record<string, unknown>)._createdAt !== 'number') {
+      return message
+    }
+    return ordered[orderedIndex++]!
+  })
+}
+
+/**
  * 截断超大 SDKMessage 的内容，保留元数据结构。
  * 处理三类膨胀源：超长 text block、超大 tool_result、内嵌 base64 图片。
  */
@@ -564,11 +602,10 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
   try {
     const raw = readFileSync(filePath, 'utf-8')
     const lines = raw.split('\n').filter((line) => line.trim())
-    return collapseDuplicateAssistantMessageGroups(
-      parseJsonlLenient<unknown>(lines, `读取 SDKMessage (${id})`)
-        .map(normalizePersistedSDKMessage)
-        .filter(message => !isUnstructuredRuntimeAssistantError(message)),
-    )
+    const messages = parseJsonlLenient<unknown>(lines, `读取 SDKMessage (${id})`)
+      .map(normalizePersistedSDKMessage)
+      .filter(message => !isUnstructuredRuntimeAssistantError(message))
+    return collapseDuplicateAssistantMessageGroups(orderSDKMessagesByCreatedAt(messages))
   } catch (error) {
     console.error(`[Agent 会话] 读取 SDKMessage 失败 (${id}):`, error)
     return []

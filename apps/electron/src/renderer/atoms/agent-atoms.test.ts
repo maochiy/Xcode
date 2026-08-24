@@ -12,6 +12,7 @@ import {
   agentSidePanelTabsAtom,
   applyAgentEvent,
   areAgentRuntimeExecutionGraphsEqual,
+  beginAgentSteeredTurn,
   createRuntimeExecutionNodeToolKey,
   fileBrowserAutoRevealAtom,
   markAgentFileModifiedAtom,
@@ -181,6 +182,43 @@ describe('Agent 暂停即时反馈', () => {
     const state = createStreamState({ running: false })
 
     expect(markAgentStreamStopped(state)).toBe(state)
+  })
+})
+
+describe('Agent 立即发送即时反馈', () => {
+  test('Given Runtime 正在运行 When steering 立即发送 Then 只重置当前回合展示且保留 Runtime 纪元与上下文用量', () => {
+    const previous = createStreamState({
+      startedAt: 100,
+      turnStartedAt: 100,
+      content: '上一回合还在输出',
+      toolActivities: [{
+        toolUseId: 'tool-1',
+        toolName: 'Bash',
+        input: {},
+        done: false,
+      }],
+      retrying: {
+        currentAttempt: 1,
+        maxAttempts: 3,
+        history: [],
+        failed: false,
+      },
+    })
+
+    const next = beginAgentSteeredTurn(previous, 250)
+
+    expect(next).toMatchObject({
+      running: true,
+      stopping: false,
+      backgroundWaiting: false,
+      content: '',
+      toolActivities: [],
+      startedAt: 100,
+      turnStartedAt: 250,
+      inputTokens: 180_000,
+      contextWindow: 200_000,
+    })
+    expect(next.retrying).toBeUndefined()
   })
 })
 

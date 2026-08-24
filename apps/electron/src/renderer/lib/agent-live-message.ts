@@ -1,4 +1,4 @@
-import type { SDKContentBlock, SDKMessage } from '@proma/shared'
+import type { SDKAssistantMessage, SDKContentBlock, SDKMessage } from '@proma/shared'
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
@@ -18,6 +18,73 @@ function getAssistantBlocks(message: SDKMessage): SDKContentBlock[] {
   return Array.isArray(innerMessage?.content)
     ? innerMessage.content as SDKContentBlock[]
     : []
+}
+
+function getAssistantText(message: SDKMessage): string {
+  return getAssistantBlocks(message)
+    .filter((block): block is Extract<SDKContentBlock, { type: 'text' }> =>
+      block.type === 'text' && typeof block.text === 'string',
+    )
+    .map((block) => block.text)
+    .join('')
+}
+
+function getUserMessageText(message: SDKMessage): string {
+  if (message.type !== 'user') return ''
+  const content = (message as { message?: { content?: unknown } }).message?.content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block): block is { type: 'text'; text: string } =>
+      typeof block === 'object'
+      && block !== null
+      && (block as { type?: unknown }).type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string',
+    )
+    .map((block) => block.text)
+    .join('\n')
+}
+
+function isPausedAssistantMessage(message: SDKMessage): boolean {
+  return message.type === 'assistant'
+    && (message as Record<string, unknown>)._promaPausedByUser === true
+}
+
+/**
+ * 暂停瞬间可能同时存在多份 Runtime partial 快照：
+ * 「当前累计正文」和「最后一个增量正文」会因为 UUID 不同都留在 live。
+ * 两者在持久化完成前会一起渲染，只有旧回合结束后才被 JSONL 覆盖，
+ * 所以需要在 live 层先保留内容更完整的一份。
+ */
+function dedupePausedAssistantMessages(messages: SDKMessage[]): SDKMessage[] {
+  const result: SDKMessage[] = []
+  for (const message of messages) {
+    if (!isPausedAssistantMessage(message) || getAssistantText(message).trim().length === 0) {
+      result.push(message)
+      continue
+    }
+
+    const text = getAssistantText(message)
+    const duplicateIndex = result.findIndex((candidate) => {
+      if (!isPausedAssistantMessage(candidate)) return false
+      const candidateText = getAssistantText(candidate)
+      return candidateText.includes(text) || text.includes(candidateText)
+    })
+    if (duplicateIndex < 0) {
+      result.push(message)
+      continue
+    }
+
+    const existing = result[duplicateIndex]!
+    const existingText = getAssistantText(existing)
+    const existingBlocks = getAssistantBlocks(existing).length
+    const currentBlocks = getAssistantBlocks(message).length
+    const currentIsMoreComplete = text.length > existingText.length
+      || (text.length === existingText.length && currentBlocks > existingBlocks)
+    if (currentIsMoreComplete) {
+      result[duplicateIndex] = message
+    }
+  }
+  return result
 }
 
 function blocksMatch(
@@ -119,6 +186,41 @@ function removeSupersededPartialMessages(
 }
 
 /**
+ * 将带有 `_createdAt` 的消息按创建时间恢复顺序。
+ *
+ * 立即发送时，新的 user 可能先落盘，而旧 assistant 的最终快照稍后才
+ * 追加到 JSONL。只按数组追加顺序渲染会得到「旧 user → 新 user → 旧
+ * assistant」。未带时间戳的历史消息保留原槽位，避免破坏旧数据。
+ */
+function orderMessagesByCreatedAt(messages: SDKMessage[]): SDKMessage[] {
+  const timestamped = messages.filter((message) =>
+    typeof (message as Record<string, unknown>)._createdAt === 'number',
+  )
+  if (timestamped.length < 2) return messages
+
+  const isChronological = timestamped.every((message, index) => {
+    if (index === 0) return true
+    const previous = timestamped[index - 1] as Record<string, unknown>
+    const current = message as Record<string, unknown>
+    return Number(previous._createdAt) <= Number(current._createdAt)
+  })
+  if (isChronological) return messages
+
+  const ordered = [...timestamped].sort((left, right) => {
+    const leftAt = Number((left as Record<string, unknown>)._createdAt)
+    const rightAt = Number((right as Record<string, unknown>)._createdAt)
+    return leftAt - rightAt
+  })
+  let orderedIndex = 0
+  return messages.map((message) => {
+    if (typeof (message as Record<string, unknown>)._createdAt !== 'number') {
+      return message
+    }
+    return ordered[orderedIndex++]!
+  })
+}
+
+/**
  * 合并实时 SDK 消息：
  * - 同 UUID 的 partial 使用最新累计快照覆盖；
  * - CCB 最终 assistant 到达时，移除同一模型消息/内容块的临时快照；
@@ -128,26 +230,58 @@ export function upsertAgentLiveMessage(
   current: SDKMessage[],
   incoming: SDKMessage,
 ): SDKMessage[] {
-  const base = removeSupersededPartialMessages(current, incoming)
   const incomingRecord = incoming as Record<string, unknown>
-  const incomingUuid = incomingRecord.uuid
+  const incomingMessageId = getAssistantModelMessageId(incoming)
+  const originalAssistant = incoming.type === 'assistant' && incomingMessageId
+    ? current.find((candidate) => (
+      candidate.type === 'assistant'
+      && getAssistantModelMessageId(candidate) === incomingMessageId
+      && typeof (candidate as Record<string, unknown>)._createdAt === 'number'
+    ))
+    : undefined
+  const incomingWithStableCreatedAt = originalAssistant
+    && typeof incomingRecord._createdAt !== 'number'
+    ? {
+        ...incoming,
+        _createdAt: (originalAssistant as Record<string, unknown>)._createdAt,
+      }
+    : incoming
+  const base = removeSupersededPartialMessages(current, incoming)
+  const stableIncomingRecord = incomingWithStableCreatedAt as Record<string, unknown>
+  const incomingUuid = stableIncomingRecord.uuid
 
   if (typeof incomingUuid === 'string' && incomingUuid.length > 0) {
-    const existingIndex = base.findIndex((message) =>
-      (message as Record<string, unknown>).uuid === incomingUuid
-    )
+    // 暂停快照属于旧回合，即使 Runtime 恰好复用了 UUID，也不能挡住
+    // 新回合的第一条 assistant 消息。
+    const existingIndex = base.findLastIndex((message) => {
+      const record = message as Record<string, unknown>
+      return record.uuid === incomingUuid && record._promaPausedByUser !== true
+    })
     if (existingIndex >= 0) {
       const existing = base[existingIndex] as Record<string, unknown>
-      if (incomingRecord._partial === true || existing._partial === true) {
+      if (stableIncomingRecord._partial === true || existing._partial === true) {
         const next = [...base]
-        next[existingIndex] = incoming
+        // final 快照通常由主进程在到达时才补 _createdAt。保留同一
+        // assistant 身份第一次出现的时间，避免旧回复的 final 快照被
+        // 排到用户刚发送的新消息后面。
+        if (
+          typeof stableIncomingRecord._createdAt !== 'number'
+          && typeof existing._createdAt === 'number'
+        ) {
+          next[existingIndex] = {
+            ...incomingWithStableCreatedAt,
+            _createdAt: existing._createdAt,
+          }
+        } else {
+          next[existingIndex] = incomingWithStableCreatedAt
+        }
         return next
       }
       return base
     }
   }
 
-  return [...base, incoming]
+  return [...base, incomingWithStableCreatedAt]
 }
 
 /**
@@ -166,6 +300,128 @@ export function mergeAgentLiveMessages(
   )
 }
 
+/**
+ * 将旧回合尚未进入 SDK transcript 的流式正文固化到 live projection。
+ *
+ * 部分 Runtime 只通过 legacy text_delta 推送正文，暂停时正文仍在
+ * AgentStreamState.content 中；如果直接启动新回合并把 content 清空，
+ * 用户已经看到的旧正文就会消失。这里优先补全同一条 assistant 快照，
+ * 只有找不到可复用的 assistant 时才新增一条暂停快照。
+ */
+export function preservePausedAgentContent(
+  current: SDKMessage[],
+  content: string,
+  sessionId: string,
+  startedAt: number | undefined,
+  model: string | undefined,
+): SDKMessage[] {
+  if (!content) return current
+
+  const lastUserIndex = current.findLastIndex((message) => message.type === 'user')
+  const assistantIndex = current.findLastIndex(
+    (message, index) => message.type === 'assistant' && index > lastUserIndex,
+  )
+  if (assistantIndex >= 0) {
+    const existing = current[assistantIndex] as SDKAssistantMessage
+    const blocks = existing.message?.content
+    if (Array.isArray(blocks)) {
+      const textIndexes = blocks.reduce<number[]>((indexes, block, index) => {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          indexes.push(index)
+        }
+        return indexes
+      }, [])
+      const existingText = textIndexes
+        .map((index) => {
+          const block = blocks[index]
+          return block?.type === 'text' ? block.text : ''
+        })
+        .join('')
+
+      if (existingText === content || existingText.includes(content)) {
+        const next = [...current]
+        next[assistantIndex] = {
+          ...existing,
+          _partial: false,
+          _promaPausedByUser: true,
+        } as SDKAssistantMessage
+        return next
+      }
+
+      const lastTextIndex = textIndexes.at(-1)
+      if (lastTextIndex != null && content.startsWith(existingText)) {
+        const next = [...current]
+        next[assistantIndex] = {
+          ...existing,
+          _partial: false,
+          _promaPausedByUser: true,
+          message: {
+            ...existing.message,
+            content: blocks.map((block, index) =>
+              index === lastTextIndex && block.type === 'text'
+                ? { ...block, text: content }
+                : block
+            ),
+          },
+        }
+        return next
+      }
+    }
+  }
+
+  // live 中通常已经有旧 user/assistant 的时间戳。快照必须排在这些消息
+  // 之后，否则会被恢复到旧 user 之前，表现为旧内容顺序错乱。
+  const currentTimestamps = current
+    .map((message) => (message as Record<string, unknown>)._createdAt)
+    .filter((value): value is number => typeof value === 'number')
+  const latestCurrentTimestamp = currentTimestamps.length > 0
+    ? Math.max(...currentTimestamps)
+    : undefined
+  const snapshotAt = latestCurrentTimestamp != null
+    ? Math.max(latestCurrentTimestamp + 1, startedAt ?? 0)
+    : (startedAt ?? Date.now())
+  const snapshot: SDKAssistantMessage = {
+    type: 'assistant',
+    uuid: `${sessionId}:paused-stream:${snapshotAt}`,
+    parent_tool_use_id: null,
+    message: {
+      id: `${sessionId}:paused-stream:${snapshotAt}`,
+      content: [{ type: 'text', text: content }],
+      ...(model ? { model } : {}),
+    },
+    _createdAt: snapshotAt,
+    _channelModelId: model,
+    _promaPausedStreamSnapshot: true,
+    _promaPausedByUser: true,
+  } as unknown as SDKAssistantMessage
+  return [...current, snapshot]
+}
+
+/**
+ * 将暂停瞬间已经进入 live projection 的旧 assistant 快照冻结。
+ *
+ * 这类内容不一定同时存在于 streamState.content（Pi/部分 Runtime 只发
+ * sdk_message），因此立即发送时不能只保存 legacy content。
+ */
+export function markPausedAgentMessages(current: SDKMessage[]): SDKMessage[] {
+  const lastUserIndex = current.findLastIndex((message) => message.type === 'user')
+  let changed = false
+  const next = current.map((message, index) => {
+    if (index <= lastUserIndex || message.type !== 'assistant') return message
+    const record = message as Record<string, unknown>
+    if (record._promaPausedByUser === true && record._partial === false) {
+      return message
+    }
+    changed = true
+    return {
+      ...message,
+      _partial: false,
+      _promaPausedByUser: true,
+    } as SDKMessage
+  })
+  return changed ? next : current
+}
+
 
 /**
  * 合并持久化消息与 liveMessages。
@@ -178,13 +434,26 @@ export function mergePersistedAndLiveMessages(
     identityOf?: (message: SDKMessage) => string
   },
 ): SDKMessage[] {
-  if (live.length === 0) return persisted
-  if (persisted.length === 0) return live
+  if (live.length === 0) return orderMessagesByCreatedAt(persisted)
+  if (persisted.length === 0) {
+    return orderMessagesByCreatedAt(dedupePausedAssistantMessages(live))
+  }
 
   const identityOf = options?.identityOf ?? ((message: SDKMessage) => {
     const record = message as Record<string, unknown>
     if (typeof record.uuid === 'string' && record.uuid.length > 0) {
       return `${message.type}:uuid:${record.uuid}`
+    }
+    if (message.type === 'user') {
+      const createdAt = typeof record._createdAt === 'number'
+        ? record._createdAt
+        : undefined
+      const text = getUserMessageText(message)
+      if (createdAt != null && text.length > 0) {
+        // 普通发送会先生成 renderer 乐观 user，再由主进程写入同一轮
+        // user。两者没有共享 uuid，但共享本轮 startedAt。
+        return `user:created-at:${createdAt}:${text}`
+      }
     }
     if (message.type === 'assistant') {
       const inner = record.message as { id?: unknown } | undefined
@@ -210,9 +479,27 @@ export function mergePersistedAndLiveMessages(
   }
 
   const liveOnly: SDKMessage[] = []
-  for (const message of live) {
+  for (const message of dedupePausedAssistantMessages(live)) {
     const identity = identityOf(message)
     if (seen.has(identity)) continue
+    // 暂停快照是为了在 JSONL 尚未刷新时保住画面。JSONL 一旦已经
+    // 包含相同或更完整的旧回复，就不能再把 live 快照追加一次，否则
+    // 同一段旧内容会在界面中重复显示。
+    if (
+      message.type === 'assistant'
+      && (message as Record<string, unknown>)._promaPausedByUser === true
+    ) {
+      const pausedText = getAssistantText(message)
+      if (
+        pausedText.trim().length > 0
+        && uniquePersisted.some((persistedMessage) =>
+          persistedMessage.type === 'assistant'
+          && getAssistantText(persistedMessage).includes(pausedText)
+        )
+      ) {
+        continue
+      }
+    }
     if (
       message.type === 'result'
       && (message as { subtype?: string }).subtype === 'interrupted'
@@ -227,7 +514,7 @@ export function mergePersistedAndLiveMessages(
     liveOnly.push(message)
   }
 
-  if (liveOnly.length === 0) return uniquePersisted
+  if (liveOnly.length === 0) return orderMessagesByCreatedAt(uniquePersisted)
 
   const merged: SDKMessage[] = []
   let persistedIndex = 0
@@ -251,7 +538,7 @@ export function mergePersistedAndLiveMessages(
   if (liveIndex < liveOnly.length) {
     merged.push(...liveOnly.slice(liveIndex))
   }
-  return merged
+  return orderMessagesByCreatedAt(merged)
 }
 
 
@@ -294,4 +581,40 @@ export function hasUnpersistedLiveAssistantNarrative(
     }
   }
   return false
+}
+
+/**
+ * 立即发送时固化的旧回合内容不能因为新回合完成就被清掉。
+ *
+ * 暂停快照可能还没来得及进入 JSONL，且它的 synthetic message id 与
+ * Runtime 最终 assistant id 不同，因此不能只按消息 identity 判断是否已落盘。
+ * 只要持久化 assistant 尚未包含快照中的正文，就继续保留 live projection。
+ */
+export function hasUnpersistedPausedAgentContent(
+  liveMessages: SDKMessage[],
+  persistedMessages: SDKMessage[],
+): boolean {
+  const persistedTexts = persistedMessages
+    .filter((message) => message.type === 'assistant')
+    .flatMap((message) => getAssistantBlocks(message))
+    .filter((block): block is Extract<SDKContentBlock, { type: 'text' }> =>
+      block.type === 'text' && typeof block.text === 'string',
+    )
+    .map((block) => block.text)
+    .filter((text) => text.trim().length > 0)
+
+  return liveMessages.some((message) => {
+    const record = message as Record<string, unknown>
+    if (message.type !== 'assistant' || record._promaPausedByUser !== true) {
+      return false
+    }
+    const text = getAssistantBlocks(message)
+      .filter((block): block is Extract<SDKContentBlock, { type: 'text' }> =>
+        block.type === 'text' && typeof block.text === 'string',
+      )
+      .map((block) => block.text)
+      .join('')
+    return text.trim().length > 0
+      && !persistedTexts.some((persistedText) => persistedText.includes(text))
+  })
 }

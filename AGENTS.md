@@ -230,6 +230,24 @@ bun run generate:icons    # 生成应用图标
 | **Google** | `google-adapter.ts` | Generative Language API | Gemini 系列 |
 | **Custom** | `openai-adapter.ts` | Chat Completions | 自定义 OpenAI 兼容端点 |
 
+#### Proma Runtime 协议来源（必须遵守）
+
+- 模型中心渠道的 `provider` 是 Runtime 协议的唯一来源，统一通过 `proma-runtime-api-mode.ts` 映射。
+- `openai`、`custom`、`zhipu`、`doubao`、`qwen`、`opencode-go-openai` 固定使用 `openai_chat_completions`。
+- 只有 `openai-responses` 使用 `openai_responses`，`openai-codex` 使用 `openai_responses_oauth`。
+- Anthropic 及其兼容渠道使用 `anthropic_messages`；Google 标准渠道使用 `google_generative_language`。
+- Pi 正常请求必须携带 `RuntimeModelRoute`。旧数据仅允许从明确的 `PROMA_RUNTIME_MODEL_PROVIDER` 等兼容字段恢复协议，禁止根据模型名、Base URL 或 API Key 推断。
+- Proma 不实现 Gemini Code Assist 私有接口；Google 仅走标准 `google-generative-ai` 链路。
+
+#### Pi Worker 共享与生命周期
+
+- `FrakioPiRuntimeAdapter` 必须使用 `createPiBridgePool()`，同一 Runtime Build 最多一个 Worker。
+- Worker 内通过 `sessions` Map 承载多个 Session；事件按 `runId` 路由，工具请求必须携带并校验 `sessionId`。
+- Session 结束后保留以支持连续追问；空闲 15 分钟回收，每个 Build 最多保留 8 个空闲 Session，超限按 LRU 回收，活跃 Session 永不回收。
+- Worker 无 Session 60 秒后关闭；应用退出时必须等待全部 Bridge 关闭。
+- 协议、凭证 revision、API mode 或 modelId 变化时，Worker 必须 dispose 旧 Session，并从 `session-files.json` 指向的原生文件恢复；禁止改写 Proma 历史 JSONL。
+- `PROMA_PI_STREAM_DEBUG=1` 只可记录时间、session/run、provider、apiMode、事件类型和 delta 长度，禁止输出凭证、正文或思考内容。
+
 #### 多模态支持
 - **图片**：各 Provider 格式不同，适配器自动转换
 - **文档**：提取文本后注入 `<file>` XML 标签
@@ -251,11 +269,19 @@ bun run generate:icons    # 生成应用图标
 
 - **`app-shell/`**：三面板布局（LeftSidebar | NavigatorPanel | MainContentPanel），侧边栏含模式切换、置顶对话、日期分组列表、流式指示器
 - **`chat/`**：聊天核心 — ChatView（消息加载/流式订阅）、ChatHeader（模型选择/上下文设置）、ChatInput（Tiptap 富文本编辑器）、ChatMessages（消息列表/自动滚动）、ParallelChatMessages（并排模式）
-- **`agent/`**：Agent 模式 — AgentView（纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、ToolActivityItem（工具调用展示）、WorkspaceSelector（工作区切换）、PermissionBanner/AskUserBanner（权限/问答请求 UI）
+- **`agent/`**：Agent 模式 — AgentView（纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、ThinkingStreamPanel（固定高度常显、完整 thinking 聚合、自动跟随与手动恢复）、ToolActivityItem（工具调用展示）、WorkspaceSelector（工作区切换）、PermissionBanner/AskUserBanner（权限/问答请求 UI）
 - **`settings/`**：设置面板 — GeneralSettings（用户档案）、AppearanceSettings（主题）、ChannelSettings（渠道管理）、ChannelForm（Provider 配置）、AgentSettings（Agent 渠道/工作区/MCP）、McpServerForm（MCP 服务器配置）、AboutSettings（版本/更新）、FeishuSettings（飞书集成）；含 `primitives/` 可复用表单组件
 - **`file-browser/`**：文件浏览器 — FileBrowser（工作区文件树浏览）
 - **`ai-elements/`**：AI 展示组件 — Markdown 渲染、代码块、Mermaid 图、推理折叠、上下文分割线、富文本输入
 - **`ui/`**：Radix UI 组件（现代化设计，CSS 变量主题）
+
+#### Agent 思考内容展示
+
+- `ThinkingStreamPanel` 是 Agent thinking 的唯一展示面板，过程正文阶段固定高度常显，不提供折叠或摘要模式；面板始终位于过程正文下方，最终正文首个增量出现后隐藏。Agent thinking 与 text 均通过 `useSmoothStream` 将累计 SSE 快照转换为按字素逐帧追加的平滑打字效果。
+- 思考面板不得铺独立卡片背景，阴影和上下渐隐只作用于文字内容。
+- `agent-turn-presentation.ts` 必须按时间顺序聚合本轮全部 thinking 原文；工具活动继续独立展示，不能混入思考面板。
+- 流式过程中默认自动滚动到最新内容；用户离开底部后暂停跟随，回到底部或点击“回到最新”后恢复。
+- 回答完成、失败或用户停止后必须隐藏思考面板；历史 thinking 仍可保留在消息数据中，但不继续展示。
 
 ### 全局 Hooks（`renderer/hooks/`）
 

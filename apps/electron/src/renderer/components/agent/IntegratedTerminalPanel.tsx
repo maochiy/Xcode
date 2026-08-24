@@ -13,6 +13,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { resolvedThemeAtom, themeStyleAtom } from '@/atoms/theme'
 import { Button } from '@/components/ui/button'
+import { IntegratedTerminalLayoutCoordinator } from '@/lib/integrated-terminal-layout'
 import { IntegratedTerminalOutputQueue } from '@/lib/integrated-terminal-output-queue'
 
 interface IntegratedTerminalPanelProps {
@@ -211,6 +212,7 @@ function IntegratedTerminalContent({
     let disposed = false
     let resizeFrame = 0
     let replayReady = false
+    const layoutCoordinator = new IntegratedTerminalLayoutCoordinator()
     const pendingData: Array<{ data: string; sequence: number }> = []
     const outputQueue = new IntegratedTerminalOutputQueue((data) => {
       if (
@@ -230,7 +232,10 @@ function IntegratedTerminalContent({
       outputQueue.enqueue(data)
     }
     const fitAndResize = (): void => {
-      if (disposed || host.clientWidth < 20 || host.clientHeight < 20) return
+      if (!isTerminalReady()) return
+      const layoutAction = layoutCoordinator.update(host.clientWidth, host.clientHeight)
+      if (!layoutAction.shouldFit) return
+      if (layoutAction.shouldFocus) terminal.focus()
       fitAddon.fit()
       void window.electronAPI.resizeIntegratedTerminal(
         terminalSessionId,
@@ -247,6 +252,7 @@ function IntegratedTerminalContent({
 
     const resizeObserver = new ResizeObserver(scheduleFit)
     resizeObserver.observe(host)
+    scheduleFit()
     const dataDisposable = terminal.onData((data) => {
       void window.electronAPI.writeIntegratedTerminal(terminalSessionId, data)
         .catch((cause: unknown) => {
@@ -309,7 +315,6 @@ function IntegratedTerminalContent({
           pendingData.length = 0
           outputQueue.flush()
           scheduleFit()
-          terminal.focus()
         })
       })
       .catch((cause: unknown) => {

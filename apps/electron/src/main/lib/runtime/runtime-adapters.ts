@@ -1,7 +1,7 @@
 /**
  * Proma Runtime 的本地适配层。
  *
- * 这里把 Pi RPC、Hermes Bridge、Codex CLI 和现有 Claude Code Runtime
+ * 这里把 Pi Worker、Hermes Bridge、Codex CLI 和现有 Claude Code Runtime
  * 统一成 AgentProviderAdapter，避免 AgentOrchestrator 直接依赖某一种原生协议。
  * 原生事件先转换成 Proma 已有的 SDKMessage，Renderer 和 JSONL 持久化无需改造。
  */
@@ -48,13 +48,6 @@ interface MessageQueue {
 interface JsonLineProcess {
   child: ChildProcessWithoutNullStreams
   lines: Interface
-}
-
-interface PiSession {
-  process: JsonLineProcess
-  queue: MessageQueue | null
-  eventCounter: number
-  assistantMessageId: string | null
 }
 
 interface HermesSession {
@@ -203,135 +196,6 @@ function eventText(value: unknown): string {
 
 function errorOf(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
-}
-
-class PiRpcAdapter implements AgentProviderAdapter {
-  private readonly sessions = new Map<string, PiSession>()
-
-  query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
-    const options = input as RuntimeQueryOptions
-    const queue = createQueue()
-    void this.run(options, queue)
-    return queue.iterable
-  }
-
-  async abort(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session) return
-    try {
-      sendJsonLine(session.process, { type: 'abort' })
-    } catch {
-      closeProcess(session.process)
-    }
-  }
-
-  async interruptQuery(sessionId: string): Promise<void> {
-    await this.abort(sessionId)
-  }
-
-  async sendQueuedMessage(
-    sessionId: string,
-    message: SDKUserMessageInput,
-    options?: SendQueuedMessageOptions,
-  ): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session) throw new Error('Pi Session 尚未打开。')
-    sendJsonLine(session.process, {
-      type: options?.interrupt ? 'steer' : 'follow_up',
-      message: message.message.content,
-    })
-    options?.onAccepted?.()
-  }
-
-  async compactSession(
-    input: AgentRuntimeSessionOperationInput,
-    instructions?: string,
-  ): Promise<void> {
-    const session = this.sessions.get(input.sessionId)
-    if (!session) throw new Error('Pi Session 尚未打开。')
-    sendJsonLine(session.process, { type: 'compact', customInstructions: instructions })
-  }
-
-  async closeSession(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session) return
-    this.sessions.delete(sessionId)
-    closeProcess(session.process)
-  }
-
-  dispose(): void {
-    for (const sessionId of this.sessions.keys()) void this.closeSession(sessionId)
-  }
-
-  private async run(_options: RuntimeQueryOptions, queue: MessageQueue): Promise<void> {
-    queue.fail(new Error('Pi 只通过 Proma 内置 Worker 运行，不再调用本机 PATH 中的 pi。'))
-  }
-
-  private handleLine(sessionId: string, line: string): void {
-    const session = this.sessions.get(sessionId)
-    if (!session?.queue) return
-    let message: unknown
-    try {
-      message = JSON.parse(line) as unknown
-    } catch {
-      return
-    }
-    if (!message || typeof message !== 'object') return
-    const record = message as Record<string, unknown>
-    // Pi 原生 RPC 直接输出 AgentSessionEvent；Proma Pi Bridge 则包在
-    // { type: "event", event: ... } 中，两种协议都要兼容。
-    const eventPayload = record.type === 'event' ? record.event : record
-    if (!eventPayload || typeof eventPayload !== 'object') return
-    const payload = eventPayload as Record<string, unknown>
-    const type = String(payload.type || '')
-    const nativeMessage = payload.message
-    if (type === 'message_update' && nativeMessage && typeof nativeMessage === 'object') {
-      const content = this.convertPiContent((nativeMessage as Record<string, unknown>).content)
-      session.assistantMessageId = String((nativeMessage as Record<string, unknown>).id || session.assistantMessageId || randomUUID())
-      session.queue.push(assistantMessage(content, sessionId, true))
-      return
-    }
-    if (type === 'message_end' && nativeMessage && typeof nativeMessage === 'object') {
-      const content = this.convertPiContent((nativeMessage as Record<string, unknown>).content)
-      session.queue.push(assistantMessage(content, sessionId, false))
-      return
-    }
-    if (type === 'tool_execution_end') {
-      const toolResult = eventText(payload.result)
-      session.queue.push({
-        type: 'user',
-        message: { content: [{ type: 'tool_result', tool_use_id: String(payload.toolCallId || randomUUID()), content: toolResult, is_error: Boolean(payload.isError) }] },
-        parent_tool_use_id: null,
-        session_id: sessionId,
-        uuid: randomUUID(),
-      } as SDKMessage)
-      return
-    }
-    if (type === 'agent_end' || type === 'agent_settled') {
-      session.queue.push(resultMessage(sessionId, ''))
-      session.queue.finish()
-      session.queue = null
-    }
-  }
-
-  private convertPiContent(value: unknown): SDKContentBlock[] {
-    if (!Array.isArray(value)) return []
-    return value.flatMap((item): SDKContentBlock[] => {
-      if (!item || typeof item !== 'object') return []
-      const record = item as Record<string, unknown>
-      if (record.type === 'text' && typeof record.text === 'string') return [textBlock(record.text)]
-      if (record.type === 'thinking' && typeof record.thinking === 'string') return [{ type: 'thinking', thinking: record.thinking }]
-      if (record.type === 'toolCall') {
-        return [{
-          type: 'tool_use',
-          id: String(record.id || randomUUID()),
-          name: String(record.name || 'Pi Tool'),
-          input: (record.arguments && typeof record.arguments === 'object' ? record.arguments : {}) as Record<string, unknown>,
-        }]
-      }
-      return []
-    })
-  }
 }
 
 class HermesBridgeAdapter implements AgentProviderAdapter {
@@ -625,13 +489,13 @@ class CodexCliAdapter implements AgentProviderAdapter {
 export class RuntimeAdapterRouter implements AgentProviderAdapter {
   private readonly claude = new ClaudeRuntimeAdapter()
   private readonly ccb = new CcbDesktopRuntimeAdapter()
-  private readonly pi = new PiRpcAdapter()
   private readonly piBridge = new PiRuntimeAdapter()
   private readonly hermes = new HermesBridgeAdapter()
   private readonly codex = new CodexRuntimeAdapter()
   private readonly codexCli = new CodexCliAdapter()
   private readonly sessions = new Map<string, RuntimeId>()
   private readonly sessionAdapters = new Map<string, AgentProviderAdapter>()
+  private disposePromise: Promise<void> | null = null
 
   query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
     const runtimeId = input.runtimeId || 'pi'
@@ -715,16 +579,21 @@ export class RuntimeAdapterRouter implements AgentProviderAdapter {
       ?? Promise.reject(new Error('当前 Runtime 不支持上下文压缩。'))
   }
 
-  dispose(): void {
-    this.claude.dispose()
-    this.ccb.dispose()
-    this.pi.dispose()
-    this.piBridge.dispose()
-    this.hermes.dispose()
-    this.codex.dispose()
-    this.codexCli.dispose()
-    this.sessions.clear()
-    this.sessionAdapters.clear()
+  async dispose(): Promise<void> {
+    if (!this.disposePromise) {
+      this.disposePromise = Promise.all([
+        Promise.resolve(this.claude.dispose()),
+        Promise.resolve(this.ccb.dispose()),
+        Promise.resolve(this.piBridge.dispose()),
+        Promise.resolve(this.hermes.dispose()),
+        Promise.resolve(this.codex.dispose()),
+        Promise.resolve(this.codexCli.dispose()),
+      ]).then(() => {
+        this.sessions.clear()
+        this.sessionAdapters.clear()
+      })
+    }
+    await this.disposePromise
   }
 
   private adapterFor(runtimeId: RuntimeId, input?: AgentQueryInput): AgentProviderAdapter {
@@ -734,7 +603,7 @@ export class RuntimeAdapterRouter implements AgentProviderAdapter {
       case 'hermes': return this.hermes
       case 'codex':
         return this.codex
-      case 'pi': return this.shouldUsePiBridge(input) ? this.piBridge : this.pi
+      case 'pi': return this.piBridge
     }
   }
 
@@ -746,10 +615,5 @@ export class RuntimeAdapterRouter implements AgentProviderAdapter {
   private requireSessionAdapter(sessionId: string): AgentProviderAdapter {
     if (!this.sessions.has(sessionId)) throw new Error('Runtime Session 尚未打开。')
     return this.adapterForSession(sessionId)
-  }
-
-  private shouldUsePiBridge(_input?: AgentQueryInput): boolean {
-    // Pi 只走安装包内置 Worker，不再 spawn 用户 PATH 里的 pi。
-    return true
   }
 }

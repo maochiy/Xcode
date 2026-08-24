@@ -126,7 +126,7 @@ export interface AgentProviderAdapter {
    */
   interruptQuery?(sessionId: string): Promise<void>
   /** 释放资源 */
-  dispose(): void
+  dispose(): void | Promise<void>
   /** 向活跃查询注入队列消息（可选，仅支持队列的 Provider 实现） */
   sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput, options?: SendQueuedMessageOptions): Promise<void>
   /** 取消队列中的待发送消息（可选） */

@@ -50,7 +50,7 @@ import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest, getWork
 import { getWorkspaceFilesDir, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
-import { buildSystemPrompt, buildDynamicContext, buildRuntimeTaskSystemPrompt } from './agent-prompt-builder'
+import { buildSystemPrompt, buildDynamicContext, buildPiUserClockLine, buildRuntimeTaskSystemPrompt } from './agent-prompt-builder'
 import { builtInSystemPrompt, dispatchForRequest, sanitizeDispatchContext } from './runtime/dispatch-policy'
 import {
   completeDispatchTask,
@@ -70,6 +70,7 @@ import {
 } from './browser/browser-agent-controller'
 import { nativeBrowserToolDenial } from './browser/browser-tool-routing'
 import { resolvePromaRuntimeModelRoute } from './runtime/proma-runtime-model-gateway'
+import { resolvePromaRuntimeApiMode } from './runtime/proma-runtime-api-mode'
 import { HermesTaskScheduler, type HermesTaskExecutionContext } from './runtime/hermes-task-scheduler'
 import { shouldSyncLegacyCcbTranscript } from './runtime/runtime-transcript-policy'
 import { deliverQueuedMessageToRuntime } from './runtime/queued-message-delivery'
@@ -617,11 +618,7 @@ export class AgentOrchestrator {
       ...(normalizedBaseUrl ? { PROMA_RUNTIME_MODEL_BASE_URL: normalizedBaseUrl } : {}),
       ...(provider
         ? {
-            PROMA_RUNTIME_MODEL_API_MODE: provider === 'google'
-              ? 'google_generative_language'
-              : provider === 'anthropic' || provider === 'minimax' || provider === 'kimi-coding'
-                ? 'anthropic_messages'
-                : 'openai_responses',
+            PROMA_RUNTIME_MODEL_API_MODE: resolvePromaRuntimeApiMode(provider),
           }
         : {}),
       // 仅 Claude 模型显式提高输出上限；其它兼容模型不注入 max_tokens 覆盖。
@@ -1060,6 +1057,19 @@ export class AgentOrchestrator {
     const { sessionId, userMessage, channelId, modelId, workspaceId, runtimeThinking, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext, retryOfErrorUuid, browserAnnotations } = input
     const stderrChunks: string[] = []
     const streamStartedAt = input.startedAt ?? Date.now()
+    /**
+     * 给每条实时事件带上所属回合的开始时间。
+     *
+     * 同一 session 在“立即发送”时会经历旧 Runtime 收尾、新 Runtime
+     * 启动两个相邻阶段。渲染进程不能只按 sessionId 接收事件，否则旧
+     * Runtime 的尾部正文可能写进新回合的流式状态。
+     */
+    const emit = (payload: AgentStreamPayload): void => {
+      this.eventBus.emit(sessionId, {
+        ...payload,
+        runStartedAt: streamStartedAt,
+      })
+    }
 
     // 用户暂停后立即发送的下一条消息允许先到达主进程。
     // 若旧回合仍处于停止收尾阶段，则在这里静默等待 active slot 真正释放；
@@ -1105,7 +1115,10 @@ export class AgentOrchestrator {
 
     const persistInitialUserMessage = (): void => {
       if (userMessagePersisted) return
-      this.persistUserMessage(sessionId, userMessage)
+      // 与 renderer 的乐观 user 使用同一个本轮 startedAt。
+      // 立即发送时 renderer 会先展示乐观消息，Runtime 随后再落盘一条
+      // 没有 uuid 的 user；时间不一致会让合并层把它们误认为两条用户消息。
+      this.persistUserMessage(sessionId, userMessage, streamStartedAt)
       userMessagePersisted = true
       callbacks.onRunStarted?.({ startedAt: streamStartedAt })
     }
@@ -1571,16 +1584,21 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 注入 browser_annotations: ${browserAnnotations?.length ?? 0}`)
       }
 
-      // Pi Worker 会在 systemPromptOverride 中读取 Context Packet 的完整 Skill 内容；
-      // Pi 原生 Session 已保存历史消息，因此用户消息侧不再重复 recentMessages，
-      // 并只保留 Skill 名称与描述，避免每轮重复注入历史和同一份 SKILL.md。
-      const contextText = contextPacketText(contextPacket, {
-        includeRecentMessages: dispatch.runtimeId !== 'pi',
-        includeSkillContent: dispatch.runtimeId !== 'pi',
-      })
-      const contextualMessage = dynamicCtx
-        ? `${dynamicCtx}\n\n${contextText}\n\n${enrichedMessage}`
-        : `${contextText}\n\n${enrichedMessage}`
+      // Pi Worker 会在 systemPromptOverride 中读取 Context Packet。
+      // 用户消息只保留原话 + 当天时刻，避免每轮把新 packet 打进 prompt cache 前缀。
+      const contextText = dispatch.runtimeId === 'pi'
+        ? ''
+        : contextPacketText(contextPacket, {
+          includeRecentMessages: true,
+          includeSkillContent: true,
+        })
+      const clockLine = dispatch.runtimeId === 'pi' ? buildPiUserClockLine() : ''
+      const contextualMessage = [
+        dynamicCtx,
+        contextText,
+        clockLine,
+        enrichedMessage,
+      ].filter(Boolean).join('\n\n')
 
       const isCompactCommand = userMessage.trim() === '/compact'
       const finalPrompt = isCompactCommand
@@ -1609,7 +1627,7 @@ export class AgentOrchestrator {
         } catch (error) {
           console.warn(`[Agent 编排] 持久化计划模式失败: sessionId=${sessionId}`, error)
         }
-        this.eventBus.emit(sessionId, {
+        emit({
           kind: 'proma_event',
           event: { type: 'plan_mode_changed', sessionId, active, source },
         })
@@ -1617,7 +1635,7 @@ export class AgentOrchestrator {
 
       // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
       if (initialPermissionMode === 'plan') {
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+        emit({ kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
         emitPlanModeChanged(true, 'initial')
       }
 
@@ -1632,7 +1650,7 @@ export class AgentOrchestrator {
           toolInput,
           signal,
           (request: ExitPlanModeRequest) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
+            emit({ kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
           },
         )
       }
@@ -1642,7 +1660,7 @@ export class AgentOrchestrator {
       const requestToolApproval = permissionService.createCanUseTool(
         sessionId,
         (request: PermissionRequest) => {
-          this.eventBus.emit(sessionId, {
+          emit({
             kind: 'proma_event',
             event: { type: 'permission_request', request },
           })
@@ -1808,7 +1826,7 @@ export class AgentOrchestrator {
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
           emitPlanModeChanged(true, 'tool')
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+          emit({ kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
@@ -1817,7 +1835,7 @@ export class AgentOrchestrator {
           return askUserService.handleAskUserQuestion(
             sessionId, input, options.signal,
             (request: AskUserRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+              emit({ kind: 'proma_event', event: { type: 'ask_user_request', request } })
             },
           )
         }
@@ -1962,11 +1980,11 @@ export class AgentOrchestrator {
         // `[1m]` 是 SDK 内部上下文变体，不应泄漏到标题生成或用户可见的模型名。
         resolvedModel = model.replace(/\[1m\]$/i, '')
         console.log(`[Agent 编排] SDK 确认模型: ${resolvedModel}`)
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
+        emit({ kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
       }
       const handleContextWindow = (cw: number): void => {
         console.log(`[Agent 编排] 缓存 ${dispatch.runtimeId} contextWindow: ${cw}`)
-        this.eventBus.emit(sessionId, {
+        emit({
           kind: 'proma_event',
           event: { type: 'context_window', contextWindow: cw },
         })
@@ -2089,7 +2107,7 @@ export class AgentOrchestrator {
               },
               onSessionId: undefined,
               onModelResolved: (model) => {
-                this.eventBus.emit(sessionId, {
+                emit({
                   kind: 'proma_event',
                   event: { type: 'model_resolved', model },
                 })
@@ -2124,7 +2142,7 @@ export class AgentOrchestrator {
                   Array.isArray((message as { message?: { content?: Array<{ type?: string }> } }).message?.content)
                   && (message as { message?: { content?: Array<{ type?: string }> } }).message?.content?.some((block) => block.type === 'tool_result')
                 )) {
-                  this.eventBus.emit(sessionId, { kind: 'sdk_message', message: projected })
+                  emit({ kind: 'sdk_message', message: projected })
                 }
               }
             } finally {
@@ -2208,11 +2226,11 @@ export class AgentOrchestrator {
 
             // 前 RETRY_VISIBILITY_THRESHOLD 次重试静默进行，避免偶发瞬时波动频繁惊扰用户
             if (retryAttempt > RETRY_VISIBILITY_THRESHOLD) {
-              this.eventBus.emit(sessionId, {
+              emit({
                 kind: 'proma_event',
                 event: { type: 'retry', status: 'starting', attempt: retryAttempt, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
               })
-              this.eventBus.emit(sessionId, {
+              emit({
                 kind: 'proma_event',
                 event: { type: 'retry', status: 'attempt', attemptData },
               })
@@ -2331,7 +2349,7 @@ export class AgentOrchestrator {
               const sub = msg.type === 'system' ? (msg as { subtype?: string }).subtype : undefined
               if (msg.type === 'assistant' || msg.type === 'user' || sub === 'task_started' || sub === 'task_progress') {
                 awaitingBackgroundWake = false
-                this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'run_resumed', sessionId } })
+                emit({ kind: 'proma_event', event: { type: 'run_resumed', sessionId } })
               }
             }
 
@@ -2484,14 +2502,14 @@ export class AgentOrchestrator {
 
                 // 如果之前有可见重试记录，发送 retry_failed
                 if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD && lastRetryableError) {
-                  this.eventBus.emit(sessionId, {
+                  emit({
                     kind: 'proma_event',
                     event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: typedError.message, delaySeconds: 0 } },
                   })
                 }
 
                 // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
-                this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSDKMsg })
+                emit({ kind: 'sdk_message', message: errorSDKMsg })
                 try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
                 completeRun(getAgentSessionMessages(sessionId), {
                   startedAt: streamStartedAt,
@@ -2517,7 +2535,7 @@ export class AgentOrchestrator {
                     if (backfilled.length > 0) {
                       accumulatedMessages.push(...backfilled)
                       for (const synthetic of backfilled) {
-                        this.eventBus.emit(sessionId, { kind: 'sdk_message', message: synthetic })
+                        emit({ kind: 'sdk_message', message: synthetic })
                       }
                     }
                     accumulatedMessages.push(msg)
@@ -2649,7 +2667,7 @@ export class AgentOrchestrator {
             if (!shouldEmit) {
               // 跳过 SDK 内部 user 消息的前端推送
             } else {
-              this.eventBus.emit(sessionId, { kind: 'sdk_message', message: msg })
+              emit({ kind: 'sdk_message', message: msg })
             }
           }
 
@@ -2662,7 +2680,7 @@ export class AgentOrchestrator {
 
           // 正常完成 — 如果之前有可见重试，发送 retry_cleared
           if (!wasStoppedByUser && retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD) {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
+            emit({ kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
           retrySucceeded = true
@@ -2701,7 +2719,7 @@ export class AgentOrchestrator {
             && this.activeSessions.has(sessionId)
           ) {
             this.planReadySessions.add(sessionId)
-            this.eventBus.emit(sessionId, {
+            emit({
               kind: 'sdk_message',
               message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
             })
@@ -2961,7 +2979,7 @@ export class AgentOrchestrator {
 
           // 如果之前有可见重试记录，发送 retry_failed
           if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD && lastRetryableError) {
-            this.eventBus.emit(sessionId, {
+            emit({
               kind: 'proma_event',
               event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: userFacingError, delaySeconds: 0 } },
             })
@@ -3002,7 +3020,7 @@ export class AgentOrchestrator {
 
         // 仅当重试曾经对用户可见时才发送 retry_failed 事件
         if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD) {
-          this.eventBus.emit(sessionId, {
+          emit({
             kind: 'proma_event',
             event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled || MAX_AUTO_RETRIES, timestamp: Date.now(), reason: lastRetryableError, errorMessage: retryFailureMessage, delaySeconds: 0 } },
           })

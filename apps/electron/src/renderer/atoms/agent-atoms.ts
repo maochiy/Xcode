@@ -81,11 +81,16 @@ export function finalizeStreamingActivities(
  */
 export function markAgentStreamStopped(state: AgentStreamState): AgentStreamState {
   if (!state.running) return state
+  const startedAt = state.turnStartedAt ?? state.startedAt
   return {
     ...state,
     running: false,
     backgroundWaiting: false,
     stopping: true,
+    // 停止点击时立即冻结耗时，避免后端完成事件返回另一套计时口径后跳变。
+    stopDurationMs: state.stopDurationMs ?? (
+      startedAt == null ? undefined : Math.max(0, Date.now() - startedAt)
+    ),
     ...finalizeStreamingActivities(state.toolActivities),
   }
 }
@@ -144,6 +149,16 @@ export interface AgentStreamState {
   contextCompaction?: ContextCompactionState
   /** 流式开始时间戳（用于思考计时持久化） */
   startedAt?: number
+  /** 用户点击停止时冻结的耗时，避免完成事件到达后停止文案跳变。 */
+  stopDurationMs?: number
+  /**
+   * 当前可见回合的开始时间戳。
+   *
+   * 运行中的 steering 会复用同一个 Runtime run，不能改写 startedAt，
+   * 否则旧 run 的 complete 事件会被竞态保护误判为陈旧事件。UI 计时
+   * 使用这个字段，让“立即发送”的新回合从用户点击时立即开始计时。
+   */
+  turnStartedAt?: number
   /** 重试状态（扩展版） */
   retrying?: {
     /** 当前第几次尝试 */
@@ -154,6 +169,29 @@ export interface AgentStreamState {
     history: RetryAttempt[]
     /** 是否已失败 */
     failed: boolean
+  }
+}
+
+/**
+ * 立即开始一个 steering 回合的前端展示。
+ *
+ * Runtime 仍处于同一个 run 时，startedAt 必须保持不变，才能让旧 run
+ * 的完成事件正常收尾；turnStartedAt 仅用于当前回合的处理中计时。
+ */
+export function beginAgentSteeredTurn(
+  previous: AgentStreamState,
+  turnStartedAt: number,
+): AgentStreamState {
+  return {
+    ...previous,
+    running: true,
+    stopping: false,
+    backgroundWaiting: false,
+    content: '',
+    toolActivities: [],
+    retrying: undefined,
+    stopDurationMs: undefined,
+    turnStartedAt,
   }
 }
 

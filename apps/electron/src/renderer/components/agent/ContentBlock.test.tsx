@@ -10,7 +10,7 @@ import { agentRuntimeExecutionGraphsAtom } from '@/atoms/agent-atoms'
 import { ContentBlock } from './ContentBlock'
 
 describe('ContentBlock Collaboration 结果摘要', () => {
-  test('Given 已完成 thinking 活动 When 展开整轮活动 Then 显示中文标题且无思考图标，折叠箭头在右', () => {
+  test('Given 已完成 thinking 活动 When 渲染 Then 思考面板自动隐藏', () => {
     const block: SDKThinkingBlock = {
       type: 'thinking',
       thinking: '正在核对登录流程。',
@@ -21,19 +21,16 @@ describe('ContentBlock Collaboration 结果摘要', () => {
       </Provider>,
     )
 
-    expect(html).toContain('data-agent-activity="thinking"')
-    expect(html).toContain('已完成思考')
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('正在核对登录流程')
-    // 已思考/已完成思考：不显示 Brain 图标
+    expect(html).not.toContain('data-agent-activity="thinking"')
+    expect(html).not.toContain('正在核对登录流程')
     expect(html).not.toContain('data-thinking-icon="true"')
-    // 折叠箭头在右侧
-    expect(html).toContain('data-collapse-chevron="right"')
+    expect(html).not.toContain('data-collapse-chevron="right"')
+    expect(html).not.toContain('aria-expanded')
     expect(html).not.toContain('Thinking')
     expect(html).not.toContain('stroke-dasharray')
   })
 
-  test('Given 运行中 thinking 已有摘要 When 渲染 Then 默认收起且保留高度动画容器，不自动展开', () => {
+  test('Given 运行中 thinking 已有内容 When 渲染 Then 固定高度常显且带阴影滚动区', () => {
     const block: SDKThinkingBlock = {
       type: 'thinking',
       thinking: '正在核对登录流程。',
@@ -50,18 +47,13 @@ describe('ContentBlock Collaboration 结果摘要', () => {
     )
 
     expect(html).toContain('正在思考')
-    // 有摘要：只出折叠箭头，默认不自动展开（点开才看）
-    expect(html).toContain('aria-expanded="false"')
-    // 正文仍在 DOM 内（靠 max-h/opacity 收起），不整行跳入
     expect(html).toContain('正在核对登录流程')
-    // 全程不显示思考图标；折叠箭头在右
     expect(html).not.toContain('data-thinking-icon="true"')
-    expect(html).toContain('data-collapse-chevron="right"')
-    // 收起态：高度/透明度容器
-    expect(html).toContain('max-h-0')
-    expect(html).toContain('opacity-0')
-    expect(html).toContain('transition-[max-height,opacity]')
-    // 思考阶段行挂载用纯淡入，避免上下跳
+    expect(html).not.toContain('data-collapse-chevron="right"')
+    expect(html).toContain('data-thinking-scroll-viewport="true"')
+    expect(html).toContain('agent-thinking-stream-surface')
+    expect(html).toContain('h-36')
+    expect(html).not.toContain('max-h-0')
     expect(html).toContain('agent-activity-fade-in')
   })
 
@@ -86,7 +78,42 @@ describe('ContentBlock Collaboration 结果摘要', () => {
 
     expect(html).toContain('data-agent-activity="tool"')
     expect(html).toContain('agent-activity-fade-in')
+    expect(html).toContain('agent-status-shimmer')
     expect(html).not.toContain('agent-activity-enter')
+  })
+
+  test('Given 工具调用已经返回结果 When 渲染最新工具 Then 不再显示运行中的白色波纹', () => {
+    const block: SDKToolUseBlock = {
+      type: 'tool_use',
+      id: 'tool-read-completed',
+      name: 'Read',
+      input: { file_path: '/tmp/completed.ts' },
+    }
+    const messages: SDKMessage[] = [{
+      type: 'user',
+      parent_tool_use_id: null,
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: '读取完成',
+        }],
+      },
+    }]
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <ContentBlock
+          block={block}
+          allMessages={messages}
+          activityRunning={false}
+          activityItem
+          isStreaming
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('data-agent-activity="tool"')
+    expect(html).not.toContain('agent-status-shimmer')
   })
 
   test('Given list_delegations 返回完整委派数据 When 渲染正文 Then 只显示一句状态摘要', () => {

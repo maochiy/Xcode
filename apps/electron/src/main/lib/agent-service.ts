@@ -398,9 +398,11 @@ export function stopAllAgents(): void {
 /**
  * 退出前关闭 CCB Desktop Runtime Host 及其 Session Worker 进程树。
  */
-export function shutdownAgentRuntime(): void {
-  adapter.dispose()
-  void ccbDesktopRuntimeClient.shutdown()
+export async function shutdownAgentRuntime(): Promise<void> {
+  await Promise.all([
+    Promise.resolve(adapter.dispose()),
+    ccbDesktopRuntimeClient.shutdown(),
+  ])
 }
 
 /**

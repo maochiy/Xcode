@@ -650,15 +650,21 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let beforeQuitCleanupStarted = false
+let beforeQuitCleanupCompleted = false
+
+app.on('before-quit', (event) => {
+  if (beforeQuitCleanupCompleted) return
+  event.preventDefault()
+  if (beforeQuitCleanupStarted) return
+  beforeQuitCleanupStarted = true
+
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
 
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   stopAllGenerations()
-  // 关闭 CCB Desktop Runtime Host 及其 Session Worker 进程树。
-  shutdownAgentRuntime()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听
@@ -677,8 +683,16 @@ app.on('before-quit', () => {
   // 销毁快速任务窗口
   destroyQuickTaskWindow()
   destroyVoiceDictationWindow()
-  // 关闭 Proma 内置 MCP HTTP Host。
-  void promaBuiltinMcpHttpHost.shutdown()
   // Clean up system tray before quitting
   destroyTray()
+
+  // 等待共享 Pi Worker、CCB Host 与内置 MCP Host 全部关闭后再真正退出，
+  // 避免子进程被遗留到下一次启动。
+  void Promise.all([
+    shutdownAgentRuntime(),
+    promaBuiltinMcpHttpHost.shutdown(),
+  ]).finally(() => {
+    beforeQuitCleanupCompleted = true
+    app.quit()
+  })
 })

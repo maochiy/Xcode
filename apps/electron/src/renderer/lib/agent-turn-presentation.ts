@@ -91,6 +91,8 @@ export interface AgentTurnPresentation {
   durationMs?: number
   usage?: AgentEventUsage
   status: AgentTurnStatus
+  /** 本轮模型实际返回的全部 thinking 原文，跨工具调用按时间顺序聚合。 */
+  thinkingContent: string
   activities: AgentActivityItem[]
   /**
    * 当前界面默认直接展示的活动（折叠收起时）。
@@ -108,6 +110,16 @@ export interface AgentTurnPresentation {
     defaultExpanded: boolean
     blockedReason?: AgentAutoCollapseBlockReason
   }
+}
+
+export function collectThinkingContent(
+  blocks: SDKContentBlock[],
+): string {
+  return blocks
+    .filter((block): block is SDKThinkingBlock => block.type === 'thinking')
+    .map((block) => block.thinking ?? '')
+    .filter((content) => content.trim().length > 0)
+    .join('\n')
 }
 
 interface BuildAgentTurnPresentationInput {
@@ -442,6 +454,186 @@ function getAssistantMessageId(message: SDKAssistantMessage): string | undefined
   return typeof innerMessage?.id === 'string' ? innerMessage.id : undefined
 }
 
+function getAssistantSnapshotBlocks(message: SDKAssistantMessage): SDKContentBlock[] {
+  const blocks = message.message?.content
+  return Array.isArray(blocks) ? blocks : []
+}
+
+function getAssistantSnapshotText(message: SDKAssistantMessage): string {
+  return getAssistantSnapshotBlocks(message)
+    .filter((block): block is SDKTextBlock =>
+      block.type === 'text' && typeof block.text === 'string',
+    )
+    .map((block) => block.text)
+    .join('')
+}
+
+function getAssistantSnapshotBlockIndexes(message: SDKAssistantMessage): number[] {
+  const record = message as unknown as Record<string, unknown>
+  const indexes: number[] = []
+  if (typeof record._partialBlockIndex === 'number') {
+    indexes.push(record._partialBlockIndex)
+  }
+  if (Array.isArray(record._partialBlockIndexes)) {
+    for (const value of record._partialBlockIndexes) {
+      if (typeof value === 'number' && Number.isInteger(value)) indexes.push(value)
+    }
+  }
+  return [...new Set(indexes)]
+}
+
+function isPausedAssistantSnapshot(message: SDKAssistantMessage): boolean {
+  return (message as unknown as Record<string, unknown>)._promaPausedByUser === true
+}
+
+function isPartialAssistantSnapshot(message: SDKAssistantMessage): boolean {
+  return (message as unknown as Record<string, unknown>)._partial === true
+}
+
+function snapshotHasSameLogicalBlock(
+  left: SDKAssistantMessage,
+  right: SDKAssistantMessage,
+): boolean {
+  const leftIndexes = getAssistantSnapshotBlockIndexes(left)
+  const rightIndexes = getAssistantSnapshotBlockIndexes(right)
+  if (leftIndexes.length > 0 && rightIndexes.length > 0) {
+    return leftIndexes.some((index) => rightIndexes.includes(index))
+  }
+
+  const leftBlocks = getAssistantSnapshotBlocks(left)
+  const rightBlocks = getAssistantSnapshotBlocks(right)
+  if (leftBlocks.length === 0 || rightBlocks.length === 0) return false
+  if (leftBlocks.some((leftBlock) =>
+    rightBlocks.some((rightBlock) =>
+      leftBlock.type === rightBlock.type
+      && (
+        leftBlock.type === 'text'
+          ? leftBlock.text === (rightBlock as SDKTextBlock).text
+          : leftBlock.type === 'thinking'
+            ? leftBlock.thinking === (rightBlock as SDKThinkingBlock).thinking
+            : leftBlock.type === 'tool_use'
+              && leftBlock.id === (rightBlock as SDKToolUseBlock).id
+      ),
+    ),
+  )) {
+    return true
+  }
+
+  const leftText = getAssistantSnapshotText(left)
+  const rightText = getAssistantSnapshotText(right)
+  return leftText.trim().length > 0
+    && rightText.trim().length > 0
+    && (leftText.includes(rightText) || rightText.includes(leftText))
+}
+
+function isMoreCompleteAssistantSnapshot(
+  candidate: SDKAssistantMessage,
+  existing: SDKAssistantMessage,
+): boolean {
+  const candidatePartial = isPartialAssistantSnapshot(candidate)
+  const existingPartial = isPartialAssistantSnapshot(existing)
+  if (candidatePartial !== existingPartial) return !candidatePartial
+
+  const candidateTextLength = getAssistantSnapshotText(candidate).length
+  const existingTextLength = getAssistantSnapshotText(existing).length
+  if (candidateTextLength !== existingTextLength) {
+    return candidateTextLength > existingTextLength
+  }
+
+  const candidateBlockCount = getAssistantSnapshotBlocks(candidate).length
+  const existingBlockCount = getAssistantSnapshotBlocks(existing).length
+  return candidateBlockCount > existingBlockCount
+}
+
+/**
+ * 流式期间同一轮可能同时存在：
+ * - CCB 按 block index 发送的 partial 快照；
+ * - Runtime 最终快照；
+ * - 立即发送时冻结下来的旧回合快照。
+ *
+ * 这些消息在 JSONL 最终刷新前会一起进入同一个 assistant turn。这里是最终
+ * 的渲染层防线：同一逻辑 block 只保留最完整的一份，避免旧正文在“运行中”
+ * 被拼接两次，而结束后刷新历史时又看起来正常。
+ */
+export function dedupeAssistantSnapshotsForPresentation(
+  messages: SDKAssistantMessage[],
+  options?: {
+    /** 用户立即发送后，旧 turn 已进入 interrupted 状态，允许跨身份去掉快照重复。 */
+    allowCrossIdentityTextSnapshots?: boolean
+  },
+): SDKAssistantMessage[] {
+  const result: SDKAssistantMessage[] = []
+
+  for (const message of messages) {
+    const messageId = getAssistantMessageId(message)
+    let duplicateIndex = -1
+
+    for (let index = 0; index < result.length; index += 1) {
+      const existing = result[index]!
+      const existingMessageId = getAssistantMessageId(existing)
+      const sameMessageId = messageId != null
+        && existingMessageId != null
+        && messageId === existingMessageId
+      const bothPaused = isPausedAssistantSnapshot(message)
+        && isPausedAssistantSnapshot(existing)
+      const comparableSnapshot = sameMessageId || bothPaused
+      if (!comparableSnapshot || !snapshotHasSameLogicalBlock(existing, message)) {
+        continue
+      }
+
+      duplicateIndex = index
+      break
+    }
+
+    if (duplicateIndex < 0) {
+      // 兼容没有 message.id 的旧 Runtime：只有明确带 partial/暂停标记，
+      // 且正文完全相同或互相包含时才去重，避免误删模型正常重复的句子。
+      const messageText = getAssistantSnapshotText(message)
+      if (
+        messageText.trim().length > 0
+        && (isPartialAssistantSnapshot(message) || isPausedAssistantSnapshot(message))
+      ) {
+        duplicateIndex = result.findIndex((existing) => {
+          const existingText = getAssistantSnapshotText(existing)
+          if (existingText.trim().length === 0) return false
+          if (
+            !isPartialAssistantSnapshot(existing)
+            && !isPausedAssistantSnapshot(existing)
+          ) {
+            return false
+          }
+          return existingText.includes(messageText) || messageText.includes(existingText)
+        })
+      }
+    }
+
+    if (
+      duplicateIndex < 0
+      && options?.allowCrossIdentityTextSnapshots
+    ) {
+      const messageText = getAssistantSnapshotText(message)
+      if (messageText.trim().length > 0) {
+        duplicateIndex = result.findIndex((existing) => {
+          const existingText = getAssistantSnapshotText(existing)
+          return existingText.trim().length > 0
+            && (
+              existingText.includes(messageText)
+              || messageText.includes(existingText)
+            )
+        })
+      }
+    }
+
+    if (duplicateIndex < 0) {
+      result.push(message)
+    } else if (isMoreCompleteAssistantSnapshot(message, result[duplicateIndex]!)) {
+      result[duplicateIndex] = message
+    }
+  }
+
+  return result
+}
+
 function assistantMessageContainsAnswer(
   message: SDKAssistantMessage,
   answer: string,
@@ -462,19 +654,25 @@ export function orderAssistantMessagesForPresentation(
   turn: AssistantTurn,
 ): SDKAssistantMessage[] {
   const resultAnswer = extractResultAnswer(turn.turnMessages)
-  if (!resultAnswer) return turn.assistantMessages
+  const assistantMessages = dedupeAssistantSnapshotsForPresentation(
+    turn.assistantMessages,
+    {
+      allowCrossIdentityTextSnapshots: isTurnStoppedByUser(turn.turnMessages),
+    },
+  )
+  if (!resultAnswer) return assistantMessages
 
   const finalMessageIds = new Set(
-    turn.assistantMessages
+    assistantMessages
       .filter((message) => assistantMessageContainsAnswer(message, resultAnswer))
       .map(getAssistantMessageId)
       .filter((id): id is string => Boolean(id)),
   )
-  if (finalMessageIds.size === 0) return turn.assistantMessages
+  if (finalMessageIds.size === 0) return assistantMessages
 
   const activities: SDKAssistantMessage[] = []
   const finalMessages: SDKAssistantMessage[] = []
-  for (const message of turn.assistantMessages) {
+  for (const message of assistantMessages) {
     const messageId = getAssistantMessageId(message)
     if (messageId && finalMessageIds.has(messageId)) {
       finalMessages.push(message)
@@ -509,8 +707,9 @@ function isWaitOnlyTool(block: SDKContentBlock): boolean {
 }
 
 function isInterruptedResultMessage(message: SDKMessage): boolean {
-  if (message.type !== 'result') return false
   const raw = message as Record<string, unknown>
+  if (raw._promaPausedByUser === true) return true
+  if (message.type !== 'result') return false
   if (raw._stoppedByUser === true) return true
   return (message as { subtype?: string }).subtype === 'interrupted'
 }
@@ -877,6 +1076,7 @@ export function buildAgentTurnPresentation(
     projected.forcedActivityIndexes,
   )
   const blocks = mergedBlocks.blocks
+  const thinkingContent = collectThinkingContent(blocks)
   const completedToolIds = getCompletedToolResultIds(input.turn.turnMessages)
   const forcedActivityIndexes = mergedBlocks.forcedActivityIndexes
   // 提前判定用户停止：后续分类不能把过程正文因 !isStreaming 提升为最终回答
@@ -1052,6 +1252,7 @@ export function buildAgentTurnPresentation(
                 completedToolIds,
               )
             : 'activity-completed',
+    thinkingContent,
     activities,
     visibleActivities,
     finalItems,

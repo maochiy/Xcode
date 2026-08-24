@@ -119,6 +119,41 @@ afterAll(() => {
 })
 
 describe('Agent 会话 JSONL 读取', () => {
+  test('Given 立即发送导致旧 assistant 晚于新 user 追加 When 读取 JSONL Then 按创建时间恢复消息顺序', () => {
+    writeAgentSessionJsonl('session-steering-order', [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'old-user',
+        message: { content: [{ type: 'text', text: '旧问题' }] },
+        parent_tool_use_id: null,
+        _createdAt: 100,
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'new-user',
+        message: { content: [{ type: 'text', text: '立即补充' }] },
+        parent_tool_use_id: null,
+        _createdAt: 300,
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'old-assistant',
+        message: {
+          id: 'old-assistant-model-message',
+          content: [{ type: 'text', text: '旧问题的完整回答' }],
+        },
+        parent_tool_use_id: null,
+        _createdAt: 200,
+      }),
+    ])
+
+    const messages = manager.getAgentSessionSDKMessages('session-steering-order')
+
+    expect(messages.map((message) => (
+      (message as { uuid?: string }).uuid
+    ))).toEqual(['old-user', 'old-assistant', 'new-user'])
+  })
+
   test('Given 会话 JSONL 混入损坏行 When 读取 SDKMessage Then 跳过坏行并保留其它消息', () => {
     writeAgentSessionJsonl('session-with-bad-line', [
       JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '你好' }] }, parent_tool_use_id: null }),

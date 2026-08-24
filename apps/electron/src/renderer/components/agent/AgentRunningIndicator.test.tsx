@@ -20,7 +20,10 @@ describe('AgentRunningIndicator 执行中模型图标', () => {
     // ≥1s 顶栏已处理后，下方仍要有「正在思考」活动行
     expect(html).toContain('data-agent-activity="thinking"')
     expect(html).toContain('正在思考')
-    expect(html).toContain('agent-status-shimmer')
+    // 顶部「已处理」和下方「正在思考」共用同一套固定宽度波纹。
+    expect(html.match(/agent-status-shimmer/g)).toHaveLength(2)
+    // 只有「正在思考」使用独立慢速波纹，避免误调到用户实际看到的另一个节点。
+    expect(html.match(/agent-thinking-status-shimmer/g)).toHaveLength(1)
     // 开局占位纯淡入，不再用 max-height 撑开
     expect(html).toContain('agent-activity-fade-in')
     expect(html).not.toContain('agent-processing-enter')
@@ -37,5 +40,7 @@ describe('AgentRunningIndicator 执行中模型图标', () => {
     expect(html).toContain('正在思考')
     expect(html).toContain('data-agent-activity="thinking"')
     expect(html).toContain('agent-status-shimmer')
+    // 开局顶部和下方占位都是「正在思考」，两处都必须使用同一慢速频率。
+    expect(html.match(/agent-thinking-status-shimmer/g)).toHaveLength(2)
   })
 })

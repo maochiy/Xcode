@@ -140,7 +140,23 @@ interface DynamicContext {
  * 包含当前时间、工作区实时状态（MCP 服务器 + Skills）和工作目录。
  * 每次调用都从磁盘实时读取，确保配置变更后下一条消息即可感知。
  */
+export function formatAgentUserClock(now = new Date()): string {
+  return now.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    weekday: 'long',
+  })
+}
+
 export function buildDynamicContext(ctx: DynamicContext): string {
   void ctx
   return ''
+}
+
+/** Pi 用户消息只带当天时刻，避免把到分钟的时间写进 system 前缀。 */
+export function buildPiUserClockLine(now = new Date()): string {
+  return `当前时间: ${formatAgentUserClock(now)}`
 }

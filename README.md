@@ -101,6 +101,8 @@ Proma 的 Agent 模式提供两套可切换的内核：
 - **Claude Agent Runtime（默认）**：基于 `@anthropic-ai/claude-agent-sdk`，使用 Anthropic Messages API 或兼容端点。
 - **Pi Agent Runtime**：基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Proma 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
 
+模型中心中选择的**供应商协议是 Runtime 的唯一协议来源**。普通 `openai`、`custom`、智谱 AI、豆包、通义千问等 OpenAI 兼容渠道固定使用 Chat Completions；只有明确选择 `openai-responses` 或 ChatGPT 订阅时才使用 Responses。Pi 不会根据模型名、Base URL 或 API Key 猜测协议。
+
 | 渠道类型 | Chat | Claude Agent | Pi Agent |
 | --- | --- | --- | --- |
 | Anthropic / Anthropic 兼容 | 支持 | 支持 | 支持 |
@@ -109,7 +111,11 @@ Proma 的 Agent 模式提供两套可切换的内核：
 | OpenAI 兼容自定义端点 | 支持 | 暂不支持 | 支持 |
 | ChatGPT 订阅（Codex OAuth） | — | 支持 | 支持 |
 
-> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换会开启新的底层 SDK 会话，但不会删除 Proma 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Proma 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
+> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换协议、渠道凭证或模型后，Pi 会从原生 Session 文件重建该 Session，不会删除或改写 Proma 中已保存的历史消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Proma 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
+
+> Pi Worker 按 Runtime Build 共享：同一 Build 最多启动一个 Worker，在其中承载多个隔离 Session。Session 空闲 15 分钟后回收，每个 Build 最多保留 8 个空闲 Session；Worker 无 Session 60 秒后退出。工具请求始终携带 `sessionId`，避免共享 Worker 后串会话。
+
+> Agent 思考内容采用 Cursor 风格固定高度面板：模型返回的全部 thinking 原文按顺序持续追加，在过程正文阶段始终位于正文下方并默认自动滚动到最新内容；用户上滚后暂停跟随，可点击“回到最新”恢复。最终正文首个增量出现后隐藏思考区，让最终回答独立展示。思考与正文的累计 SSE 快照都会经过按字素逐帧追加的平滑队列，不再整块跳出。
 
 > **Kimi Coding Plan 用户须知**：Proma 已获得 Kimi 官方白名单支持，使用 Proma 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
 
@@ -157,10 +163,10 @@ proma-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@proma/electron` | `0.15.0` | Electron 桌面应用 |
-| `@proma/shared` | `0.1.42` | 共享类型、IPC 常量、配置和工具 |
-| `@proma/core` | `0.2.15` | Provider Adapter、SSE、Shiki 高亮 |
-| `@proma/ui` | `0.1.9` | 共享 React UI 组件 |
+| `@proma/electron` | `0.16.18` | Electron 桌面应用 |
+| `@proma/shared` | `0.1.70` | 共享类型、IPC 常量、配置和工具 |
+| `@proma/core` | `0.2.16` | Provider Adapter、SSE、Shiki 高亮 |
+| `@proma/ui` | `0.1.11` | 共享 React UI 组件 |
 
 常用命令：
 

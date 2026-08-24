@@ -15,16 +15,21 @@ import type {
   AgentProviderAdapter,
   AgentQueryInput,
   AgentRuntimeSessionOperationInput,
+  SDKAssistantMessage,
   SDKContentBlock,
   SDKMessage,
   SDKSystemMessage,
   SDKUserMessageInput,
   SendQueuedMessageOptions,
+  PromaRuntimeApiMode,
+  ProviderType,
 } from '@proma/shared'
 import { getRuntimeSessionsDir } from '../config-paths'
 import type { RuntimeModelRoute } from '@proma/shared'
 import { getRuntimeConfig, isPackagedElectronApp } from './runtime-registry'
 import { PiMcpBridge } from './pi-mcp-bridge'
+import { canonicalToolError, handlePromaCanonicalTool, isPromaCanonicalTool } from './proma-canonical-tools'
+import { isPromaProviderType, resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
 
 interface MessageQueue {
   iterable: AsyncIterable<SDKMessage>
@@ -39,7 +44,7 @@ interface FrakioPiEvent {
 }
 
 interface FrakioPiBridge {
-  on(event: 'event' | 'exit', callback: (value: unknown) => void): void
+  on(event: 'event' | 'exit' | 'sessionDisposed', callback: (value: unknown) => void): void
   startRun(payload: Record<string, unknown>): Promise<Record<string, unknown>>
   steer(sessionId: string, message: string): Promise<unknown>
   cancel(sessionId: string): Promise<unknown>
@@ -49,7 +54,7 @@ interface FrakioPiBridge {
 }
 
 interface FrakioPiBridgeModule {
-  createPiBridge(input: Record<string, unknown>): FrakioPiBridge
+  createPiBridgePool(input: Record<string, unknown>): FrakioPiBridge
 }
 
 interface PiRuntimeQueryOptions extends AgentQueryInput {
@@ -59,8 +64,22 @@ interface PiRuntimeQueryOptions extends AgentQueryInput {
   onSessionId?: (sessionId: string) => void
 }
 
+interface PiRunState {
+  token: number
+  runId: string
+  sessionId: string
+  runtimeBuildId: string
+  queue: MessageQueue
+  stream: PiAssistantMessageStream
+  settled: boolean
+  lastUsage?: PiUsageSnapshot
+}
+
 function compactTrigger(value: unknown): 'manual' | 'auto' {
-  return value === 'threshold' || value === 'auto_compact_start' || value === 'auto_compaction'
+  return value === 'threshold'
+    || value === 'overflow'
+    || value === 'auto_compact_start'
+    || value === 'auto_compaction'
     ? 'auto'
     : 'manual'
 }
@@ -70,8 +89,78 @@ function usageNumber(payload: Record<string, unknown>, ...keys: string[]): numbe
     const value = payload[key]
     if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
   }
+  const nested = payload.prompt_tokens_details
+  if (nested && typeof nested === 'object') {
+    for (const key of keys) {
+      const value = (nested as Record<string, unknown>)[key]
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+    }
+  }
   return undefined
 }
+
+const PI_REASONING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** 有思考档位且不是 off 时打开 Pi 模型 reasoning，才会向网关要思考 summary 流。 */
+export function piWorkerModelReasoning(effortLevel?: string): boolean {
+  const level = String(effortLevel || 'medium').toLowerCase()
+  return PI_REASONING_LEVELS.has(level)
+}
+
+export const PI_WORKER_THINKING_LEVEL_MAP = {
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+} as const
+
+export interface PiUsageSnapshot {
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  context_window?: number
+}
+
+export function piUsageSnapshot(payload: Record<string, unknown>): PiUsageSnapshot {
+  const inputTokens = usageNumber(
+    payload,
+    'inputTokens',
+    'input_tokens',
+    'input',
+  ) ?? 0
+  const outputTokens = usageNumber(
+    payload,
+    'outputTokens',
+    'output_tokens',
+    'output',
+  ) ?? 0
+  const cacheReadTokens = usageNumber(
+    payload,
+    'cacheReadTokens',
+    'cacheRead',
+    'cache_read_input_tokens',
+    'cached_tokens',
+  )
+  const cacheWriteTokens = usageNumber(
+    payload,
+    'cacheWriteTokens',
+    'cacheWrite',
+    'cache_write_tokens',
+    'cache_creation_input_tokens',
+  )
+  const contextWindow = usageNumber(payload, 'contextWindow', 'context_window')
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    ...(cacheReadTokens != null ? { cache_read_input_tokens: cacheReadTokens } : {}),
+    ...(cacheWriteTokens != null ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
+    ...(contextWindow != null ? { context_window: contextWindow } : {}),
+  }
+}
+
 
 /** 把 Pi 原生 context.compaction.* 事件转换为统一的 SDK system 消息。 */
 export function compactionSystemMessage(
@@ -91,6 +180,9 @@ export function compactionSystemMessage(
   }
   const failed = eventType === 'context.compaction.failed'
   const estimatedTokensAfter = usageNumber(payload, 'tokensAfterEstimate', 'estimatedTokensAfter', 'postTokens')
+  const summary = typeof payload.summary === 'string' && payload.summary.trim()
+    ? payload.summary
+    : undefined
   return {
     type: 'system',
     subtype: failed ? 'status' : 'compact_boundary',
@@ -99,12 +191,14 @@ export function compactionSystemMessage(
     compactTrigger: compactTrigger(payload.trigger),
     compactPreTokens: usageNumber(payload, 'tokensBefore', 'preTokens'),
     ...(estimatedTokensAfter != null ? { compactionEstimatedTokensAfter: estimatedTokensAfter } : {}),
+    ...(summary ? { summary } : {}),
     ...(failed
       ? { compact_result: 'failed', compact_error: String(payload.error || '上下文压缩失败') }
       : { compact_metadata: {
           trigger: compactTrigger(payload.trigger),
           pre_tokens: usageNumber(payload, 'tokensBefore', 'preTokens'),
           post_tokens: estimatedTokensAfter,
+          ...(summary ? { summary } : {}),
         } }),
   } as SDKMessage
 }
@@ -114,22 +208,12 @@ export function usageSystemMessage(
   sessionId: string,
   payload: Record<string, unknown>,
 ): SDKMessage {
-  const inputTokens = usageNumber(payload, 'inputTokens', 'input_tokens')
-  const outputTokens = usageNumber(payload, 'outputTokens', 'output_tokens')
-  const cacheReadTokens = usageNumber(payload, 'cacheReadTokens', 'cacheRead', 'cache_read_input_tokens')
-  const cacheWriteTokens = usageNumber(payload, 'cacheWriteTokens', 'cacheWrite', 'cache_creation_input_tokens')
-  const contextWindow = usageNumber(payload, 'contextWindow', 'context_window')
+  const usage = piUsageSnapshot(payload)
   return {
     type: 'assistant',
     message: {
       content: [],
-      usage: {
-        input_tokens: inputTokens ?? 0,
-        output_tokens: outputTokens ?? 0,
-        ...(cacheReadTokens != null ? { cache_read_input_tokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens != null ? { cache_creation_input_tokens: cacheWriteTokens } : {}),
-        ...(contextWindow != null ? { context_window: contextWindow } : {}),
-      },
+      usage,
     },
     parent_tool_use_id: null,
     session_id: sessionId,
@@ -209,6 +293,12 @@ function thinkingBlock(thinking: string): SDKContentBlock {
   return { type: 'thinking', thinking }
 }
 
+interface PiAssistantStreamMessage extends SDKAssistantMessage {
+  message: SDKAssistantMessage['message'] & { id: string }
+  _partial?: true
+  _createdAt?: number
+}
+
 function assistantMessage(
   sessionId: string,
   text: string,
@@ -216,7 +306,8 @@ function assistantMessage(
   partial: boolean,
   uuid: string,
   messageId: string,
-): SDKMessage {
+  createdAt: number,
+): PiAssistantStreamMessage {
   const content: SDKContentBlock[] = []
   if (thinking) content.push(thinkingBlock(thinking))
   if (text) content.push(textBlock(text))
@@ -229,17 +320,220 @@ function assistantMessage(
     parent_tool_use_id: null,
     session_id: sessionId,
     uuid,
+    _createdAt: createdAt,
     ...(partial ? { _partial: true } : {}),
-  } as SDKMessage
+  } as PiAssistantStreamMessage
 }
 
-function resultMessage(sessionId: string, output: string, error = ''): SDKMessage {
+export interface PiAssistantMessageStream {
+  readonly output: string
+  readonly reasoning: string
+  appendText(text: string): PiAssistantStreamMessage
+  appendReasoning(reasoning: string): PiAssistantStreamMessage
+  reconcileText(text: string): PiAssistantStreamMessage | undefined
+  reconcileReasoning(reasoning: string): PiAssistantStreamMessage | undefined
+  /**
+   * 用整轮最终快照校正流式内容。
+   *
+   * steering 可能让旧 assistant 的最终快照晚于分段事件到达。此时不能把
+   * 旧 assistant 缺失的尾部追加到新 assistant，否则旧内容会变成“只显示一部分”
+   * 且新回复会混入旧回复。该方法会把缺失内容补回对应的上一段。
+   */
+  reconcileCumulativeText(text: string): PiAssistantStreamMessage[]
+  reconcileCumulativeReasoning(reasoning: string): PiAssistantStreamMessage[]
+  flush(usage?: PiUsageSnapshot): PiAssistantStreamMessage | undefined
+}
+
+/**
+ * 管理单次 Pi run 内的 assistant 分段。
+ * 压缩开始前 flush 当前分段，可确保正文先于压缩边界落盘；压缩后继续输出时使用新身份。
+ */
+export function createPiAssistantMessageStream(sessionId: string): PiAssistantMessageStream {
+  let output = ''
+  let reasoning = ''
+  let segmentOutput = ''
+  let segmentReasoning = ''
+  let committedOutput = ''
+  let committedReasoning = ''
+  const committedSegments: Array<{
+    uuid: string
+    messageId: string
+    createdAt: number
+    output: string
+    reasoning: string
+  }> = []
+  let messageUuid = randomUUID()
+  let messageId = `pi-${sessionId}-${messageUuid}`
+  let segmentCreatedAt = Date.now()
+
+  const segmentMessage = (
+    segment: {
+      uuid: string
+      messageId: string
+      createdAt: number
+      output: string
+      reasoning: string
+    },
+    partial: boolean,
+    usage?: PiUsageSnapshot,
+  ): PiAssistantStreamMessage => {
+    const message = assistantMessage(
+      sessionId,
+      segment.output,
+      segment.reasoning,
+      partial,
+      segment.uuid,
+      segment.messageId,
+      segment.createdAt,
+    )
+    if (!partial && usage) {
+      message.message = { ...message.message, usage }
+    }
+    return message
+  }
+
+  const currentMessage = (partial: boolean, usage?: PiUsageSnapshot): PiAssistantStreamMessage => {
+    return segmentMessage({
+      uuid: messageUuid,
+      messageId,
+      createdAt: segmentCreatedAt,
+      output: segmentOutput,
+      reasoning: segmentReasoning,
+    }, partial, usage)
+  }
+
+  const rotateSegment = (): void => {
+    committedSegments.push({
+      uuid: messageUuid,
+      messageId,
+      createdAt: segmentCreatedAt,
+      output: segmentOutput,
+      reasoning: segmentReasoning,
+    })
+    committedOutput = output
+    committedReasoning = reasoning
+    segmentOutput = ''
+    segmentReasoning = ''
+    messageUuid = randomUUID()
+    messageId = `pi-${sessionId}-${messageUuid}`
+    segmentCreatedAt = Date.now()
+  }
+
+  const reconcile = (
+    complete: string,
+    current: string,
+    committed: string,
+    update: (nextComplete: string, nextSegment: string) => void,
+  ): PiAssistantStreamMessage | undefined => {
+    if (!complete || complete === current) return undefined
+    if (complete.startsWith(current)) {
+      const suffix = complete.slice(current.length)
+      update(complete, `${complete.startsWith(committed) ? complete.slice(committed.length) : ''}`)
+      return suffix ? currentMessage(true) : undefined
+    }
+    update(complete, complete.startsWith(committed) ? complete.slice(committed.length) : complete)
+    return currentMessage(true)
+  }
+
+  const reconcileCumulative = (
+    complete: string,
+    kind: 'text' | 'reasoning',
+  ): PiAssistantStreamMessage[] => {
+    if (!complete) return []
+    const current = kind === 'text' ? output : reasoning
+    if (complete === current) return []
+
+    const committed = kind === 'text' ? committedOutput : committedReasoning
+    const currentSegment = kind === 'text' ? segmentOutput : segmentReasoning
+    if (
+      committedSegments.length > 0
+      && complete.startsWith(committed)
+      && complete.endsWith(currentSegment)
+      && complete.length >= committed.length + currentSegment.length
+    ) {
+      const missing = complete.slice(
+        committed.length,
+        complete.length - currentSegment.length,
+      )
+      if (missing) {
+        const previous = committedSegments.at(-1)!
+        if (kind === 'text') previous.output += missing
+        else previous.reasoning += missing
+        if (kind === 'text') output = complete
+        else reasoning = complete
+
+        return [segmentMessage(previous, true)]
+      }
+    }
+
+    const corrected = kind === 'text'
+      ? reconcileTextInternal(complete)
+      : reconcileReasoningInternal(complete)
+    return corrected ? [corrected] : []
+  }
+
+  const reconcileTextInternal = (text: string): PiAssistantStreamMessage | undefined =>
+    reconcile(text, output, committedOutput, (nextOutput, nextSegment) => {
+      output = nextOutput
+      segmentOutput = nextSegment
+    })
+
+  const reconcileReasoningInternal = (completeReasoning: string): PiAssistantStreamMessage | undefined =>
+    reconcile(completeReasoning, reasoning, committedReasoning, (nextReasoning, nextSegment) => {
+      reasoning = nextReasoning
+      segmentReasoning = nextSegment
+    })
+
+  return {
+    get output() {
+      return output
+    },
+    get reasoning() {
+      return reasoning
+    },
+    appendText(text) {
+      output += text
+      segmentOutput += text
+      return currentMessage(true)
+    },
+    appendReasoning(delta) {
+      reasoning += delta
+      segmentReasoning += delta
+      return currentMessage(true)
+    },
+    reconcileText(text) {
+      return reconcileTextInternal(text)
+    },
+    reconcileReasoning(completeReasoning) {
+      return reconcileReasoningInternal(completeReasoning)
+    },
+    reconcileCumulativeText(text) {
+      return reconcileCumulative(text, 'text')
+    },
+    reconcileCumulativeReasoning(completeReasoning) {
+      return reconcileCumulative(completeReasoning, 'reasoning')
+    },
+    flush(usage?: PiUsageSnapshot) {
+      if (!segmentOutput && !segmentReasoning) return undefined
+      const message = currentMessage(false, usage)
+      rotateSegment()
+      return message
+    },
+  }
+}
+
+export function resultMessage(
+  sessionId: string,
+  output: string,
+  error = '',
+  usage?: PiUsageSnapshot,
+): SDKMessage {
   return {
     type: 'result',
     subtype: error ? 'error_during_execution' : 'success',
     result: output,
     errors: error ? [error] : undefined,
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage: usage ?? { input_tokens: 0, output_tokens: 0 },
     session_id: sessionId,
   } as SDKMessage
 }
@@ -250,20 +544,60 @@ function eventText(payload: Record<string, unknown>): string {
     : typeof payload.text === 'string' ? payload.text : ''
 }
 
-function providerFor(env: Record<string, string | undefined>): string {
-  if (env.PROMA_RUNTIME_MODEL_PROVIDER) return env.PROMA_RUNTIME_MODEL_PROVIDER
-  if (env.PROMA_MODEL_CENTER_PROVIDER) return env.PROMA_MODEL_CENTER_PROVIDER
-  if (env.FRAKIO_MODEL_CENTER_PROVIDER) return env.FRAKIO_MODEL_CENTER_PROVIDER
-  if (env.FRAKIO_MODEL_ROUTE_BASE_URL) return 'openai'
-  if (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) return 'anthropic'
-  if (env.GEMINI_API_KEY || env.GOOGLE_API_KEY) return 'google'
-  return 'openai'
+function providerFor(env: Record<string, string | undefined>): ProviderType | null {
+  const provider = env.PROMA_RUNTIME_MODEL_PROVIDER
+    || env.PROMA_MODEL_CENTER_PROVIDER
+    || env.FRAKIO_MODEL_CENTER_PROVIDER
+    || ''
+  return isPromaProviderType(provider) ? provider : null
 }
 
-function apiModeFor(provider: string): string {
-  if (provider === 'anthropic') return 'anthropic_messages'
-  if (provider === 'google') return 'google_generative_language'
-  return 'openai_responses'
+function piProtocolMissing(): Error {
+  return Object.assign(
+    new Error('PI_MODEL_PROTOCOL_MISSING: Pi 缺少模型中心明确供应商协议，无法安全选择 API。'),
+    { code: 'PI_MODEL_PROTOCOL_MISSING' },
+  )
+}
+
+export interface ResolvedPiModelRoute {
+  provider: ProviderType
+  apiMode: Exclude<PromaRuntimeApiMode, 'legacy-compat'>
+  routeRevision: string
+  credentialRevision: string
+}
+
+export function resolvePiModelRoute(
+  input: PiRuntimeQueryOptions,
+  env: Record<string, string | undefined>,
+): ResolvedPiModelRoute {
+  if (input.modelRoute && input.modelRoute.apiMode !== 'legacy-compat') {
+    if (!isPromaProviderType(input.modelRoute.provider)) throw piProtocolMissing()
+    const apiMode = resolvePromaRuntimeApiMode(input.modelRoute.provider)
+    if (input.modelRoute.apiMode !== apiMode) {
+      throw Object.assign(
+        new Error(
+          `PI_MODEL_PROTOCOL_MISMATCH: 模型中心供应商协议 ${input.modelRoute.provider} `
+          + `必须使用 ${apiMode}，实际收到 ${input.modelRoute.apiMode}。`,
+        ),
+        { code: 'PI_MODEL_PROTOCOL_MISMATCH' },
+      )
+    }
+    return {
+      provider: input.modelRoute.provider,
+      apiMode,
+      routeRevision: input.modelRoute.routeRevision,
+      credentialRevision: input.modelRoute.credentialRevision,
+    }
+  }
+  const provider = providerFor(env)
+  if (!provider) throw piProtocolMissing()
+  const apiMode = resolvePromaRuntimeApiMode(provider)
+  return {
+    provider,
+    apiMode,
+    routeRevision: `legacy-env:${provider}:${input.model || 'default'}`,
+    credentialRevision: 'legacy-env',
+  }
 }
 
 function systemPromptText(value: PiRuntimeQueryOptions['systemPrompt']): string {
@@ -286,13 +620,15 @@ export function piWorkerSessionIdentity(input: {
   contextPacket?: { packetId?: string } | null
   systemPrompt?: PiRuntimeQueryOptions['systemPrompt']
 }): PiWorkerSessionIdentity {
+  void input.contextPacket
   return {
     profileSnapshot: {
       name: 'Proma',
       role: 'Proma Pi 基础内核',
       soul: '遵循 Proma System Prompt 和 Hermes 策略路由。',
       scope: '普通对话、需求澄清和最终结果汇总。',
-      revision: input.contextPacket?.packetId || 'proma',
+      // 固定 revision，避免每轮 packetId UUID 打穿 prompt cache 前缀。
+      revision: 'proma',
     },
     hostSystemPrompt: systemPromptText(input.systemPrompt),
   }
@@ -433,8 +769,13 @@ function withPiWorkerCompatShim(env: Record<string, string | undefined>): Record
 }
 
 export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
-  private readonly bridges = new Map<string, FrakioPiBridge>()
+  private bridgePool: FrakioPiBridge | null = null
+  private bridgePoolModulePath = ''
   private readonly mcpBridges = new Map<string, PiMcpBridge>()
+  private readonly runStates = new Map<string, PiRunState>()
+  private readonly sessionRuns = new Map<string, string>()
+  private readonly workspaceSlugs = new Map<string, string>()
+  private runGeneration = 0
   /** sessionId → Pi 原生 sessionFile 路径，用于跨轮/跨进程恢复 Pi 会话历史 */
   private readonly sessionFiles = new Map<string, string>()
   private sessionFilesLoaded = false
@@ -446,15 +787,19 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
   }
 
   async abort(sessionId: string): Promise<void> {
-    await this.bridges.get(sessionId)?.cancel(sessionId)
+    await this.bridgePool?.cancel(sessionId)
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const bridge = this.bridges.get(sessionId)
-    if (!bridge) return
-    await bridge.disposeSession(sessionId).catch(() => {})
-    await bridge.close().catch(() => {})
-    this.bridges.delete(sessionId)
+    const runId = this.sessionRuns.get(sessionId)
+    if (runId) {
+      const state = this.runStates.get(runId)
+      if (state && !state.settled) this.finishRun(state, '已取消')
+      this.runStates.delete(runId)
+      this.sessionRuns.delete(sessionId)
+    }
+    await this.bridgePool?.disposeSession(sessionId).catch(() => {})
+    this.workspaceSlugs.delete(sessionId)
     const mcpBridge = this.mcpBridges.get(sessionId)
     if (mcpBridge) {
       await mcpBridge.dispose().catch(() => {})
@@ -471,15 +816,13 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
     message: SDKUserMessageInput,
     _options?: SendQueuedMessageOptions,
   ): Promise<void> {
-    const bridge = this.bridges.get(sessionId)
-    if (!bridge) throw new Error('Proma Pi Session 尚未打开。')
-    await bridge.steer(sessionId, message.message.content)
+    if (!this.bridgePool) throw new Error('Proma Pi Session 尚未打开。')
+    await this.bridgePool.steer(sessionId, message.message.content)
   }
 
   async compactSession(input: AgentRuntimeSessionOperationInput, instructions?: string): Promise<void> {
-    const bridge = this.bridges.get(input.sessionId)
-    if (!bridge) throw new Error('Proma Pi Session 尚未打开。')
-    await bridge.compact(input.sessionId, { instructions: instructions || '' })
+    if (!this.bridgePool) throw new Error('Proma Pi Session 尚未打开。')
+    await this.bridgePool.compact(input.sessionId, { instructions: instructions || '' })
   }
 
   private sessionFilesPath(): string {
@@ -509,8 +852,197 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
     } catch { /* 持久化失败不影响主流程 */ }
   }
 
-  dispose(): void {
-    for (const sessionId of this.bridges.keys()) void this.closeSession(sessionId)
+  async dispose(): Promise<void> {
+    for (const state of this.runStates.values()) {
+      if (!state.settled) this.finishRun(state, '应用正在退出')
+    }
+    const mcpClosures = [...this.mcpBridges.values()].map((bridge) => bridge.dispose().catch(() => {}))
+    this.mcpBridges.clear()
+    this.workspaceSlugs.clear()
+    this.sessionRuns.clear()
+    this.runStates.clear()
+    const pool = this.bridgePool
+    this.bridgePool = null
+    this.bridgePoolModulePath = ''
+    await Promise.all([
+      ...mcpClosures,
+      pool?.close().catch(() => {}),
+    ])
+  }
+
+  private finishRun(
+    state: PiRunState,
+    error = '',
+    payload: Record<string, unknown> = {},
+  ): void {
+    if (state.settled) return
+    state.settled = true
+    const finalReasoning = typeof payload.reasoning === 'string' ? payload.reasoning : ''
+    const finalOutput = typeof payload.output === 'string' ? payload.output : ''
+    for (const correction of state.stream.reconcileCumulativeReasoning(finalReasoning)) {
+      state.queue.push(correction)
+    }
+    for (const correction of state.stream.reconcileCumulativeText(finalOutput)) {
+      state.queue.push(correction)
+    }
+    const finalAssistant = state.stream.flush(state.lastUsage)
+    if (finalAssistant) state.queue.push(finalAssistant)
+    state.queue.push(resultMessage(state.sessionId, state.stream.output, error, state.lastUsage))
+    state.queue.finish()
+    this.runStates.delete(state.runId)
+    if (this.sessionRuns.get(state.sessionId) === state.runId) {
+      this.sessionRuns.delete(state.sessionId)
+    }
+  }
+
+  private async handleToolRequest(
+    name: string,
+    params: Record<string, unknown>,
+    context: Record<string, unknown>,
+  ): Promise<unknown> {
+    const sessionId = String(context.sessionId || '')
+    if (!sessionId) throw new Error('Pi 工具请求缺少 sessionId，已拒绝执行以避免串会话。')
+    if (isPromaCanonicalTool(name)) {
+      try {
+        return await handlePromaCanonicalTool(name, params, {
+          sessionId,
+          workspaceSlug: this.workspaceSlugs.get(sessionId) || '',
+        })
+      } catch (error) {
+        throw new Error(canonicalToolError(error))
+      }
+    }
+    const mcpBridge = this.mcpBridges.get(sessionId)
+    if (!mcpBridge) throw new Error(`Pi Session ${sessionId} 的 MCP 工具上下文不可用。`)
+    return mcpBridge.handleToolCall(name, params)
+  }
+
+  private handleBridgeEvent(value: unknown): void {
+    const message = value as { runId?: string; event?: FrakioPiEvent }
+    const runId = String(message.runId || '')
+    const state = this.runStates.get(runId)
+    if (!state || state.settled) return
+    const event = message.event
+    const payload = event?.payload || {}
+    if (event?.type === 'context.compaction.started') {
+      const finalAssistant = state.stream.flush(state.lastUsage)
+      if (finalAssistant) state.queue.push(finalAssistant)
+      state.queue.push(compactionSystemMessage(state.sessionId, event.type, payload))
+    } else if (
+      event?.type === 'context.compaction.completed'
+      || event?.type === 'context.compaction.failed'
+    ) {
+      state.queue.push(compactionSystemMessage(state.sessionId, event.type, payload))
+    } else if (event?.type === 'context.usage.updated') {
+      state.lastUsage = piUsageSnapshot(payload)
+      state.queue.push(usageSystemMessage(state.sessionId, payload))
+    } else if (event?.type === 'run.turn.started') {
+      // steering 的消息真正进入 Pi 上下文时才切换分段；不能在
+      // steer() 仅入队时切换，否则旧模型尚未结束的输出会被误归到新回复。
+      const finalAssistant = state.stream.flush(state.lastUsage)
+      if (finalAssistant) state.queue.push(finalAssistant)
+    } else if (
+      event?.type === 'message.delta'
+      || event?.type === 'reasoning.delta'
+      || event?.type === 'reasoning.summary'
+    ) {
+      const text = eventText(payload)
+      if (text) {
+        state.queue.push(event.type === 'reasoning.delta' || event.type === 'reasoning.summary'
+          ? state.stream.appendReasoning(text)
+          : state.stream.appendText(text))
+      }
+    } else if (event?.type === 'tool.started') {
+      // 工具调用会切断 Pi 的 assistant 消息。必须先固化工具前的过程正文，
+      // 让工具后的最终正文使用新的 assistant 身份并排在工具之后。
+      // 否则同 UUID partial 会一直原位更新在工具之前，Renderer 无法判断
+      // 后续正文已经进入最终回答阶段，思考面板也就不能及时隐藏。
+      const assistantBeforeTool = state.stream.flush(state.lastUsage)
+      if (assistantBeforeTool) state.queue.push(assistantBeforeTool)
+      state.queue.push({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'tool_use',
+            id: String(payload.toolCallId || randomUUID()),
+            name: String(payload.toolName || 'Pi Tool'),
+            input: (payload.args && typeof payload.args === 'object' ? payload.args : {}) as Record<string, unknown>,
+          }],
+        },
+        parent_tool_use_id: null,
+        session_id: state.sessionId,
+        uuid: randomUUID(),
+      } as SDKMessage)
+    } else if (event?.type === 'tool.completed') {
+      state.queue.push({
+        type: 'user',
+        message: {
+          content: [{
+            type: 'tool_result',
+            tool_use_id: String(payload.toolCallId || randomUUID()),
+            content: String(payload.resultPreview || ''),
+            is_error: Boolean(payload.isError),
+          }],
+        },
+        parent_tool_use_id: null,
+        session_id: state.sessionId,
+        uuid: randomUUID(),
+      } as SDKMessage)
+    } else if (
+      event?.type === 'run.completed'
+      || event?.type === 'run.failed'
+      || event?.type === 'run.cancelled'
+    ) {
+      this.finishRun(state, String(payload.error || ''), payload)
+    }
+  }
+
+  private handleBridgeExit(value: unknown): void {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+    const binding = record.runtimeBinding && typeof record.runtimeBinding === 'object'
+      ? record.runtimeBinding as Record<string, unknown>
+      : {}
+    const runtimeBuildId = String(binding.runtimeBuildId || '')
+    const rawError = record.error
+    const error = rawError instanceof Error ? rawError : new Error('Proma Pi Worker 已退出。')
+    for (const state of [...this.runStates.values()]) {
+      if (!runtimeBuildId || state.runtimeBuildId === runtimeBuildId) {
+        this.finishRun(state, error.message)
+      }
+    }
+  }
+
+  private ensureBridgePool(
+    bridgeModulePath: string,
+    module: FrakioPiBridgeModule,
+    bridgeEnv: Record<string, string | undefined>,
+  ): FrakioPiBridge {
+    if (this.bridgePool && this.bridgePoolModulePath === bridgeModulePath) return this.bridgePool
+    const oldPool = this.bridgePool
+    if (oldPool) void oldPool.close()
+    const pool = module.createPiBridgePool({
+      env: bridgeEnv,
+      toolHandler: (
+        name: string,
+        params: Record<string, unknown>,
+        context: Record<string, unknown>,
+      ) => this.handleToolRequest(name, params, context),
+    })
+    pool.on('event', (value) => this.handleBridgeEvent(value))
+    pool.on('exit', (value) => this.handleBridgeExit(value))
+    pool.on('sessionDisposed', (value) => {
+      const record = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+      const sessionId = String(record.sessionId || '')
+      const mcpBridge = this.mcpBridges.get(sessionId)
+      if (mcpBridge) {
+        this.mcpBridges.delete(sessionId)
+        void mcpBridge.dispose().catch(() => {})
+      }
+      this.workspaceSlugs.delete(sessionId)
+    })
+    this.bridgePool = pool
+    this.bridgePoolModulePath = bridgeModulePath
+    return pool
   }
 
   private async run(input: PiRuntimeQueryOptions, queue: MessageQueue): Promise<void> {
@@ -525,6 +1057,7 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       }
       const module = await import(pathToFileURL(bridgeModulePath).href) as unknown as FrakioPiBridgeModule
       const env = input.env || {}
+      const modelRoute = resolvePiModelRoute(input, env)
       const binding = resolvePiWorkerRuntimeBinding(config.runtimeHome || '')
       const bridgeEnv = withPiWorkerCompatShim({
         PROMA_RUNTIME_HOME: config.runtimeHome || '',
@@ -538,18 +1071,15 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       // 导致第二轮及以后 externalTools 为空、browser 等 MCP 工具全部 not found。
       const mcpBridge = this.mcpBridges.get(input.sessionId) || new PiMcpBridge()
       const externalTools = await mcpBridge.collectExternalTools(input.mcpServers).catch(() => [])
-      const bridge = module.createPiBridge({
-        toolHandler: (name: string, params: Record<string, unknown>) => mcpBridge.handleToolCall(name, params),
-        runtimeBinding: {
-          runtimeId: 'pi',
-          runtimeVersion: binding.runtimeVersion,
-          runtimeBuildId: binding.runtimeBuildId,
-          runtimeDir: binding.runtimeDir,
-          adapterProtocolVersion: binding.adapterProtocolVersion,
-        },
-        env: bridgeEnv,
-      })
-      this.bridges.set(input.sessionId, bridge)
+      const workspaceSlug = input.contextPacket?.workspace?.slug || ''
+      this.workspaceSlugs.set(input.sessionId, workspaceSlug)
+      const existingRunId = this.sessionRuns.get(input.sessionId)
+      const existingRun = existingRunId ? this.runStates.get(existingRunId) : undefined
+      if (existingRun && !existingRun.settled) {
+        this.finishRun(existingRun, '已取消')
+        await this.bridgePool?.cancel(input.sessionId).catch(() => {})
+      }
+      const bridge = this.ensureBridgePool(bridgeModulePath, module, bridgeEnv)
       this.mcpBridges.set(input.sessionId, mcpBridge)
       // 把模型路由里的压缩策略作为可持久化的 system 消息先推给主进程，
       // 让输入框上下文 Usage 徽标能读取（与 CCB 适配器行为对齐）；
@@ -561,90 +1091,32 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       if (compactionConfigMessage) queue.push(compactionConfigMessage)
       const piSessionRoot = join(getRuntimeSessionsDir(), 'pi', 'sessions')
       const piAgentDir = join(getRuntimeSessionsDir(), 'pi', 'agents', input.sessionId)
-      let output = ''
-      let reasoning = ''
-      let settled = false
-      // Pi Worker 推的是增量 delta（不是累计文本），同一轮回复需要用同一个
-      // uuid 让主进程 latestPartialAssistants 覆盖机制生效，否则每个 token
-      // 都会被固化为独立 assistant 消息，渲染时全部换行（不走 Proma 标准
-      // 消息气泡）。终态消息沿用同一个 uuid，自动把 partial 从 Map 里清掉。
-      const streamMessageUuid = randomUUID()
-      const streamMessageId = `pi-${input.sessionId}-${streamMessageUuid}`
-      bridge.on('event', (value) => {
-        const message = value as { event?: FrakioPiEvent }
-        const event = message.event
-        const payload = event?.payload || {}
-        if (event?.type === 'context.compaction.started') {
-          queue.push(compactionSystemMessage(input.sessionId, event.type, payload))
-        } else if (
-          event?.type === 'context.compaction.completed'
-          || event?.type === 'context.compaction.failed'
-        ) {
-          queue.push(compactionSystemMessage(input.sessionId, event.type, payload))
-        } else if (event?.type === 'context.usage.updated') {
-          queue.push(usageSystemMessage(input.sessionId, payload))
-        } else if (event?.type === 'message.delta' || event?.type === 'reasoning.summary') {
-          const text = eventText(payload)
-          if (text) {
-            if (event.type === 'reasoning.summary') reasoning += text
-            else output += text
-            // 推累计文本 + 固定 uuid，渲染层走 text_complete 替换语义，
-            // 主进程 partial Map 也只会保留最新一份，落盘为单条消息。
-            queue.push(assistantMessage(input.sessionId, output, reasoning, true, streamMessageUuid, streamMessageId))
-          }
-        } else if (event?.type === 'tool.started') {
-          queue.push({
-            type: 'assistant',
-            message: {
-              content: [{
-                type: 'tool_use',
-                id: String(payload.toolCallId || randomUUID()),
-                name: String(payload.toolName || 'Pi Tool'),
-                input: (payload.args && typeof payload.args === 'object' ? payload.args : {}) as Record<string, unknown>,
-              }],
-            },
-            parent_tool_use_id: null,
-            session_id: input.sessionId,
-            uuid: randomUUID(),
-          } as SDKMessage)
-        } else if (event?.type === 'tool.completed') {
-          queue.push({
-            type: 'user',
-            message: {
-              content: [{
-                type: 'tool_result',
-                tool_use_id: String(payload.toolCallId || randomUUID()),
-                content: String(payload.resultPreview || ''),
-                is_error: Boolean(payload.isError),
-              }],
-            },
-            parent_tool_use_id: null,
-            session_id: input.sessionId,
-            uuid: randomUUID(),
-          } as SDKMessage)
-        } else if (event?.type === 'run.completed' || event?.type === 'run.failed' || event?.type === 'run.cancelled') {
-          if (settled) return
-          settled = true
-          const error = String(payload.error || '')
-          if (output || reasoning) {
-            queue.push(assistantMessage(input.sessionId, output, reasoning, false, streamMessageUuid, streamMessageId))
-          }
-          queue.push(resultMessage(input.sessionId, output, error))
-          queue.finish()
-        }
-      })
-      bridge.on('exit', (value) => {
-        if (settled) return
-        settled = true
-        const error = value instanceof Error ? value : new Error('Proma Pi Worker 已退出。')
-        queue.push(resultMessage(input.sessionId, output, error.message))
-        // 已经推送结构化 result 后正常结束队列，避免同一错误再进入
-        // AsyncIterator catch 路径，造成错误消息和 Toast 重复。
-        queue.finish()
-      })
-      const accepted = await bridge.startRun({
-        runId: input.sessionId,
+      const token = ++this.runGeneration
+      const runState: PiRunState = {
+        token,
+        runId: `${input.sessionId}:${token}`,
         sessionId: input.sessionId,
+        runtimeBuildId: binding.runtimeBuildId,
+        queue,
+        stream: createPiAssistantMessageStream(input.sessionId),
+        settled: false,
+      }
+      this.runStates.set(runState.runId, runState)
+      this.sessionRuns.set(input.sessionId, runState.runId)
+      const accepted = await bridge.startRun({
+        runId: runState.runId,
+        sessionId: input.sessionId,
+        routeRevision: modelRoute.routeRevision,
+        credentialRevision: modelRoute.credentialRevision,
+        apiMode: modelRoute.apiMode,
+        modelId: input.modelRoute?.modelId || input.model || 'default',
+        runtimeBinding: {
+          runtimeId: 'pi',
+          runtimeVersion: binding.runtimeVersion,
+          runtimeBuildId: binding.runtimeBuildId,
+          runtimeDir: binding.runtimeDir,
+          adapterProtocolVersion: binding.adapterProtocolVersion,
+        },
         threadId: input.sessionId,
         cwd: input.cwd || process.cwd(),
         // Proma Pi Worker 会在启动时用这两个目录创建 auth.json 和原生
@@ -661,12 +1133,13 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         thinkingLevel: input.effortLevel || 'medium',
         // Proma MCP 工具（collaboration 子 Agent delegate_* 等）暴露给 Pi Worker。
         externalTools,
+        workspaceId: workspaceSlug,
         ...piWorkerSessionIdentity(input),
         model: {
-          providerId: input.modelRoute?.provider || providerFor(env),
+          providerId: modelRoute.provider,
           modelId: input.modelRoute?.modelId || input.model || 'default',
           modelName: input.modelRoute?.modelId || input.model || 'default',
-          apiMode: input.modelRoute?.apiMode || apiModeFor(providerFor(env)),
+          apiMode: modelRoute.apiMode,
           baseUrl: input.modelRoute?.baseUrl
             || env.PROMA_RUNTIME_MODEL_BASE_URL
             || env.PROMA_MODEL_CENTER_PROVIDER_BASE_URL
@@ -691,6 +1164,8 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
           // 模型上下文窗口：优先取压缩策略里的 contextWindow（来自渠道模型配置），
           // 让 Pi 内核按真实窗口计算压缩触发点，而不是用 worker 兜底的 128K。
           contextWindow: input.modelRoute?.compaction?.contextWindow,
+          reasoning: piWorkerModelReasoning(input.effortLevel),
+          thinkingLevelMap: PI_WORKER_THINKING_LEVEL_MAP,
         },
         contextPacket: input.contextPacket || {
           dispatchPolicy: { instruction: systemPromptText(input.systemPrompt) },
@@ -703,26 +1178,24 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       }
       if (input.compactRequest) {
         try {
-          await bridge.compact(input.sessionId, { instructions: '' })
-          if (!settled) {
-            settled = true
-            queue.push(resultMessage(input.sessionId, ''))
-            queue.finish()
-          }
+          await bridge.compact(input.sessionId, { instructions: '', completeRun: true })
+          this.finishRun(runState)
         } catch (error) {
           const failure = error instanceof Error ? error : new Error(String(error))
-          if (!settled) {
-            settled = true
-            queue.push(resultMessage(input.sessionId, '', failure.message))
-            queue.finish()
-          }
+          this.finishRun(runState, failure.message)
         }
       }
       input.onSessionId?.(String(accepted.sessionId || input.sessionId))
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error))
-      queue.push(resultMessage(input.sessionId, '', failure.message))
-      queue.finish()
+      const runId = this.sessionRuns.get(input.sessionId)
+      const state = runId ? this.runStates.get(runId) : undefined
+      if (state && state.queue === queue && !state.settled) {
+        this.finishRun(state, failure.message)
+      } else if (!state || state.queue !== queue) {
+        queue.push(resultMessage(input.sessionId, '', failure.message))
+        queue.finish()
+      }
     }
   }
 }

@@ -24,7 +24,7 @@ import { contextPacketText } from './context-packet-text'
 // context-packet-compiler 的传递依赖链包含顶层 import electron 的模块
 // （channel-manager 的 safeStorage 等），bun test 环境无法加载真实 electron。
 // 静态 import 会被提升到 mock 之前执行，因此这里用动态 import。
-const { contextPacketFromRun } = await import('./context-packet-compiler')
+const { compileContextPacket, contextPacketFromRun } = await import('./context-packet-compiler')
 
 function packetFixture(): ContextPacket {
   const taskGraph: RuntimeTaskGraph = {
@@ -242,5 +242,31 @@ describe('Proma Context Packet', () => {
     expect(packet.artifacts[0]?.content).toBe('前置计划')
     // 任务图本身仍完整投影，模型能看到当前执行节点
     expect(packet.taskGraph?.tasks[0]?.id).toBe('task-1')
+  })
+
+  test('Given 同一会话连续编译 When 生成 packetId Then 使用稳定的 session 前缀', () => {
+    const input = {
+      sessionId: 'session-stable',
+      modelRoute: {
+        modelId: 'model-1',
+        provider: 'anthropic',
+        routeRevision: 'route-1',
+        runtimeId: 'pi' as const,
+        channelId: 'channel-1',
+        baseUrl: '',
+        apiMode: 'openai_responses' as const,
+        credentialRevision: 'r1',
+        capabilities: {},
+        source: 'legacy-compat' as const,
+      },
+      runtimeId: 'pi' as const,
+      strategyId: 'proma.pi.clarification.v1',
+      strategyInstruction: '普通对话',
+      recentMessageLimit: 0,
+    }
+    const first = compileContextPacket(input)
+    const second = compileContextPacket(input)
+    expect(first.packetId).toBe('context-session-stable')
+    expect(second.packetId).toBe(first.packetId)
   })
 })

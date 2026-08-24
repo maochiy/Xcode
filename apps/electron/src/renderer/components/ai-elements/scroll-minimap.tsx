@@ -1,7 +1,7 @@
 /**
  * ScrollMinimap — 消息导航迷你地图 + 滚动进度条
  *
- * 在消息区域右侧显示：
+ * 在消息区域左侧显示：
  * 1. 短横杠代表每条消息的位置（迷你地图），悬浮时弹出消息预览列表
  * 正文滚动条保持隐藏；迷你地图仅承担消息定位，不额外绘制滚动滑块。
  * 必须放在 StickToBottom（Conversation）内部使用。
@@ -30,7 +30,6 @@ export interface MinimapItem {
 
 interface ScrollMinimapProps {
   items: MinimapItem[]
-  rightOffset?: number
 }
 
 /** 最少消息数才显示迷你地图 */
@@ -73,10 +72,7 @@ function escapeRegExp(str: string): string {
 
 // ── 主组件 ──
 
-export function ScrollMinimap({
-  items,
-  rightOffset = 0,
-}: ScrollMinimapProps): React.ReactElement | null {
+export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
   const [hovered, setHovered] = React.useState(false)
   const [isLeaving, setIsLeaving] = React.useState(false)
@@ -278,17 +274,14 @@ export function ScrollMinimap({
   const barCount = Math.min(items.length, MAX_BARS)
 
   return (
-    <div
-      className="absolute top-0 bottom-0 z-30 flex pointer-events-none transition-[right] duration-200 motion-reduce:transition-none"
-      style={{ right: rightOffset }}
-    >
+    <div className="absolute bottom-0 left-3 top-0 z-30 flex pointer-events-none">
       {/* ── 迷你地图悬停区域（面板 + 横杠） ── */}
-      <div className="flex items-start h-full">
+      <div className="flex h-full flex-row-reverse items-start">
         {/* 展开面板 */}
         {hovered && (
           <div
             className={cn(
-              'mr-1 w-[280px] rounded-lg border bg-popover shadow-xl origin-top-right flex flex-col overflow-hidden pointer-events-auto',
+              'ml-2 flex w-[280px] origin-top-left flex-col overflow-hidden rounded-lg border bg-popover shadow-xl pointer-events-auto',
               isLeaving
                 ? 'animate-out fade-out-0 zoom-out-95 duration-75'
                 : 'animate-in fade-in-0 zoom-in-95 duration-150'
@@ -343,7 +336,7 @@ export function ScrollMinimap({
                     onClick={() => scrollToMessage(item.id)}
                   >
                     <ItemIcon item={item} />
-                    <div className="flex-1 min-w-0">
+                    <div className="max-h-12 min-w-0 flex-1 overflow-hidden">
                       <HighlightedPreview text={item.preview} query={searchQuery} />
                     </div>
                   </button>

@@ -4,7 +4,7 @@
  * 支持三种内容块类型：
  * - text: 通过 MessageResponse 渲染 Markdown
  * - tool_use: 语义化短语行（如 "读取 foo.ts 第 10-60 行"），展开显示结构化结果
- * - thinking: 运行中原位增长，完成后拥有独立的第二级折叠
+ * - thinking: 固定高度常显的 Cursor 风格思考流
  */
 
 import * as React from 'react'
@@ -45,10 +45,11 @@ import {
 import { isParallelToolCallCancellation } from './tool-result-status'
 import { AgentModelLogo } from './AgentTurnStatusLine'
 import {
-  formatTurnDuration,
   getAgentTurnStatusLabel,
   resolveRunningTurnStatus,
 } from '@/lib/agent-turn-status'
+import { ThinkingStreamPanel } from './ThinkingStreamPanel'
+import { useSmoothStream } from '@proma/ui'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -126,12 +127,8 @@ export interface ContentBlockProps {
   activityRunning?: boolean
   /** 顶层 text 是否属于工作活动而不是最终回答。 */
   activityItem?: boolean
-  /** 思考块的耗时（秒），用于显示"已思考 N 秒" */
-  thinkingDurationMs?: number
-  /** 思考块展开时附带的历史活动节点 */
+  /** 最新工具展开时附带的历史工具节点。 */
   priorActivityNodes?: React.ReactNode
-  /** 是否存在可展开的历史活动 */
-  hasPriorActivities?: boolean
 }
 
 // ===== 工具短语 diff 着色 =====
@@ -226,8 +223,6 @@ interface ToolUseBlockProps {
   activityRunning?: boolean
   /** 展开时附带的更早工具调用（多工具波次历史） */
   priorActivityNodes?: React.ReactNode
-  /** 是否存在可展开的历史工具 */
-  hasPriorActivities?: boolean
 }
 
 function ToolUseBlock(props: ToolUseBlockProps): React.ReactElement {
@@ -250,7 +245,6 @@ function CollaborationToolUseBlock({
   leadingModel,
   activityRunning,
   priorActivityNodes,
-  hasPriorActivities = false,
 }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   // 委派节点只依赖子会话元数据；不订阅整图/全局 sessions，避免大会话重渲染。
@@ -267,7 +261,7 @@ function CollaborationToolUseBlock({
     return summarizeCollaborationDelegations(resultText)
   }, [block.name, isError, resultText])
   const canExpandResult = shouldShowResult && !collaborationResultSummary
-  const canToggleHistory = hasPriorActivities === true
+  const canToggleHistory = priorActivityNodes != null
   const canToggle = canExpandResult || canToggleHistory
   const collaborationNodes = React.useMemo(() => {
     if (!sessionId) return []
@@ -442,7 +436,6 @@ function RegularToolUseBlock({
   leadingModel,
   activityRunning,
   priorActivityNodes,
-  hasPriorActivities = false,
 }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const openSidePanelTab = useSetAtom(openAgentSidePanelTabAtom)
@@ -481,7 +474,7 @@ function RegularToolUseBlock({
     return summarizeCollaborationDelegations(resultText)
   }, [block.name, isError, resultText])
   const canExpandResult = shouldShowResult && !collaborationResultSummary
-  const canToggleHistory = hasPriorActivities === true
+  const canToggleHistory = priorActivityNodes != null
   const canToggle = canExpandResult || canToggleHistory
 
   const phrase = getToolPhrase(block.name, block.input)
@@ -539,7 +532,18 @@ function RegularToolUseBlock({
         )}
         style={animate ? { animationDelay: delay } : undefined}
       >
-        <div className="flex w-full items-center gap-2 py-0.5 text-left">
+        <button
+          type="button"
+          className={cn(
+            'flex w-full items-center gap-2 py-0.5 text-left',
+            canToggleHistory && 'transition-opacity hover:opacity-70',
+          )}
+          disabled={!canToggleHistory}
+          aria-expanded={canToggleHistory ? expanded : undefined}
+          onClick={() => {
+            if (canToggleHistory) setExpanded((previous) => !previous)
+          }}
+        >
           {creationRunning && leadingModel ? (
             <AgentModelLogo model={leadingModel} />
           ) : isActualError ? (
@@ -561,7 +565,22 @@ function RegularToolUseBlock({
               {subagentName}
             </span>
           )}
-        </div>
+          {canToggleHistory && (
+            <ChevronRight
+              className={cn(
+                'size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150',
+                expanded && 'rotate-90',
+              )}
+              data-collapse-chevron="right"
+            />
+          )}
+        </button>
+
+        {expanded && canToggleHistory && priorActivityNodes ? (
+          <div className="ml-5.5 mt-1 space-y-1 border-l border-border/35 pl-3">
+            {priorActivityNodes}
+          </div>
+        ) : null}
 
         {executionNode && presentation && (
           <button
@@ -726,133 +745,25 @@ function getCancelledLabel(toolName: string): string {
   return '已取消'
 }
 
-// ===== 思考块（整轮折叠之外仍保留自己的第二级折叠） =====
+// ===== 思考块 =====
 
 interface ThinkingBlockProps {
   block: SDKThinkingBlock
   dimmed?: boolean
   running?: boolean
-  leadingModel?: string
-  durationMs?: number
-  /** 展开时附带的历史活动（此前的思考正文 + 工具调用），由上层渲染 */
-  priorActivityNodes?: React.ReactNode
-  /** 是否存在可展开的历史活动（即使当前思考正文仍为空） */
-  hasPriorActivities?: boolean
-}
-
-export function stripLeadingThinkingHeading(content: string): string {
-  const normalized = content.replace(/\r\n/g, '\n')
-  if (/^\s*\*\*\s*$/.test(normalized)) return ''
-  return normalized
-    .replace(/^\s*\*\*([^\n*]+)\*\*\s*(?:\n+|$)/, '')
-    .replace(/^\s*#{1,3}\s+[^\n]+\s*(?:\n+|$)/, '')
-    .trimStart()
 }
 
 function ThinkingBlock({
   block,
   dimmed = false,
   running = false,
-  leadingModel,
-  durationMs,
-  priorActivityNodes,
-  hasPriorActivities = false,
 }: ThinkingBlockProps): React.ReactElement {
-  const summary = React.useMemo(
-    () => stripLeadingThinkingHeading(block.thinking ?? ''),
-    [block.thinking],
-  )
-  // 有思考正文或历史活动才可折叠；过程正文不进此折叠
-  const canToggle = summary.length > 0 || hasPriorActivities
-  // 默认始终收起：有内容只出右侧箭头，点开才看；不自动展开（避免布局“跳”）
-  // 展开/收起仅用高度 + 透明度过渡；思考正文增量是同项更新，不整行 remount。
-  // 用户手动打开后永不因 running/暂停自动关闭。
-  const [expanded, setExpanded] = React.useState(false)
-  const summaryRef = React.useRef<HTMLDivElement>(null)
-
-  React.useLayoutEffect(() => {
-    if (!running || !expanded) return
-    const element = summaryRef.current
-    if (element) element.scrollTop = element.scrollHeight
-  }, [expanded, running, summary, priorActivityNodes])
-
-  const title = running
-    ? '正在思考'
-    : durationMs != null && durationMs > 0
-      ? `已思考 ${formatTurnDuration(durationMs)}`
-      : '已完成思考'
-  const showExpandedBody = expanded && canToggle
-
-  // 全程不显示思考 Brain 图标
-  const bodyIndentClass = leadingModel ? 'ml-7' : 'ml-0'
-
   return (
-    <div
-      className={cn(
-        // 纯淡入入场；思考正文增量是同项更新（稳定 key），不会因内容变化整行 remount
-        'agent-activity-fade-in py-0.5',
-        dimmed ? 'text-muted-foreground/65' : 'text-muted-foreground',
-      )}
-      data-agent-activity="thinking"
-    >
-      <button
-        type="button"
-        className="inline-flex min-h-7 max-w-full items-center gap-1 rounded-md text-left outline-none enabled:hover:opacity-75 focus-visible:ring-2 focus-visible:ring-ring/45"
-        disabled={!canToggle}
-        aria-expanded={canToggle ? expanded : undefined}
-        onClick={() => {
-          if (!canToggle) return
-          setExpanded((previous) => !previous)
-        }}
-      >
-        {leadingModel ? (
-          <AgentModelLogo model={leadingModel} />
-        ) : null}
-        <span className={cn(
-          // 「正在思考 / 已思考 N 秒」固定短文案完整显示；箭头紧跟文案
-          'min-w-0 text-[14px] whitespace-nowrap',
-          title.length > 24 && 'truncate',
-          running && 'agent-status-shimmer',
-        )}>
-          {title}
-        </span>
-        {canToggle && (
-          <ChevronRight
-            className={cn(
-              'size-3 shrink-0 text-muted-foreground/45 transition-transform duration-300 motion-reduce:transition-none',
-              expanded && 'rotate-90',
-            )}
-            data-collapse-chevron="right"
-          />
-        )}
-      </button>
-      <div
-        ref={summaryRef}
-        className={cn(
-          bodyIndentClass,
-          // 文档：摘要容器高度 + 透明度展开；可见区约 8.75rem，长文内部滚动
-          'min-w-0 overflow-y-auto text-[13px] leading-5 transition-[max-height,opacity] duration-[420ms] ease-out motion-reduce:transition-none',
-          '[&_.prose]:text-inherit [&_.prose]:leading-5',
-          showExpandedBody
-            ? 'pointer-events-auto max-h-[8.75rem] opacity-100'
-            : 'pointer-events-none max-h-0 opacity-0',
-        )}
-      >
-        {/* 正文始终挂在 DOM，收起时靠 max-h/opacity 隐藏，增量在末尾增长 */}
-        <div className="space-y-2 py-0.5">
-          {hasPriorActivities && priorActivityNodes ? (
-            <div className="space-y-1 border-l border-border/35 pl-3">
-              {priorActivityNodes}
-            </div>
-          ) : null}
-          {summary ? (
-            <MessageResponse className="font-normal prose-p:my-1 prose-strong:font-normal [&_strong]:font-normal [&_b]:font-normal [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-              {summary}
-            </MessageResponse>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <ThinkingStreamPanel
+      content={block.thinking ?? ''}
+      running={running}
+      className={dimmed ? 'opacity-80' : undefined}
+    />
   )
 }
 
@@ -860,6 +771,7 @@ function ProcessTextActivity({
   block,
   basePath,
   basePaths,
+  running,
   leadingModel,
 }: {
   block: SDKTextBlock
@@ -882,15 +794,49 @@ function ProcessTextActivity({
         leadingModel && 'grid grid-cols-[20px_minmax(0,1fr)] gap-x-2',
       )}>
         {leadingModel ? <AgentModelLogo model={leadingModel} className="mt-0.5" /> : null}
-        <MessageResponse
+        <SmoothAgentMessageResponse
+          content={block.text}
+          isStreaming={running}
           basePath={basePath}
           basePaths={basePaths}
           className="text-[14px] leading-6 text-muted-foreground prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
-        >
-          {block.text}
-        </MessageResponse>
+        />
       </div>
     </div>
+  )
+}
+
+interface SmoothAgentMessageResponseProps {
+  content: string
+  isStreaming: boolean
+  basePath?: string
+  basePaths?: string[]
+  className?: string
+}
+
+/** 将累计 SSE 快照转换为按字素逐帧追加的打字效果。 */
+function SmoothAgentMessageResponse({
+  content,
+  isStreaming,
+  basePath,
+  basePaths,
+  className,
+}: SmoothAgentMessageResponseProps): React.ReactElement {
+  const { displayedContent } = useSmoothStream({
+    content,
+    isStreaming,
+    minDelay: 10,
+    maxCharsPerFrame: 1,
+  })
+
+  return (
+    <MessageResponse
+      basePath={basePath}
+      basePaths={basePaths}
+      className={className}
+    >
+      {displayedContent}
+    </MessageResponse>
   )
 }
 
@@ -910,9 +856,7 @@ export function ContentBlock({
   leadingModel,
   activityRunning,
   activityItem = false,
-  thinkingDurationMs,
   priorActivityNodes,
-  hasPriorActivities,
 }: ContentBlockProps): React.ReactElement | null {
   // text 块 — 主要内容，不受 dimmed 影响
   if (block.type === 'text') {
@@ -933,14 +877,22 @@ export function ContentBlock({
       return (
         <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-2">
           <AgentModelLogo model={leadingModel} className="mt-0.5" />
-          <MessageResponse basePath={basePath} basePaths={basePaths}>
-            {textBlock.text}
-          </MessageResponse>
+          <SmoothAgentMessageResponse
+            content={textBlock.text}
+            isStreaming={isStreaming === true}
+            basePath={basePath}
+            basePaths={basePaths}
+          />
         </div>
       )
     }
     return (
-      <MessageResponse basePath={basePath} basePaths={basePaths}>{textBlock.text}</MessageResponse>
+      <SmoothAgentMessageResponse
+        content={textBlock.text}
+        isStreaming={isStreaming === true}
+        basePath={basePath}
+        basePaths={basePaths}
+      />
     )
   }
 
@@ -961,7 +913,6 @@ export function ContentBlock({
         leadingModel={leadingModel}
         activityRunning={activityRunning}
         priorActivityNodes={priorActivityNodes}
-        hasPriorActivities={hasPriorActivities}
       />
     )
   }
@@ -977,10 +928,6 @@ export function ContentBlock({
         block={thinkingBlock}
         dimmed={dimmed}
         running={activityRunning === true}
-        leadingModel={leadingModel}
-        durationMs={thinkingDurationMs}
-        priorActivityNodes={priorActivityNodes}
-        hasPriorActivities={hasPriorActivities}
       />
     )
   }
