@@ -13,12 +13,16 @@
 const Module = require('node:module')
 const originalLoad = Module._load
 
+function isProperLockfileParent(filename) {
+  return /(?:^|[\\/])proper-lockfile(?:[\\/]|$)/.test(filename || '')
+}
+
 Module._load = function load(request, parent, isMain) {
   const loaded = originalLoad.apply(this, arguments)
 
   if (
     request === 'signal-exit'
-    && parent?.filename?.includes('/proper-lockfile/')
+    && isProperLockfileParent(parent?.filename)
     && typeof loaded !== 'function'
     && typeof loaded?.onExit === 'function'
   ) {

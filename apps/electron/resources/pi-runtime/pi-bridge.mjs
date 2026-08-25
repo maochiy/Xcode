@@ -28,7 +28,18 @@ function piWorkerStartupError(message, code = 'PI_WORKER_STARTUP_FAILED') {
   return Object.assign(new Error(message), { code });
 }
 
-export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'pi-worker.mjs'), env = {}, runtimeBinding = null, toolHandler }) {
+export function piWorkerStartupTimeoutMs(platform = process.platform) {
+  return platform === 'win32' ? 60_000 : 20_000;
+}
+
+export function createPiBridge({
+  workerPath = path.join(__dirname, 'workers', 'pi-worker.mjs'),
+  env = {},
+  runtimeBinding = null,
+  toolHandler,
+  forkProcess = fork,
+  startupTimeoutMs = piWorkerStartupTimeoutMs(),
+}) {
   const emitter = new EventEmitter();
   const pending = new Map();
   let child = null;
@@ -69,10 +80,11 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
   }
 
   async function ensureStarted() {
-    if (child?.connected) return child;
     if (readyPromise) return readyPromise;
+    if (child?.connected && readyInfo) return child;
     readyPromise = new Promise((resolve, reject) => {
-      const next = fork(workerPath, [], {
+      const workerRequirePath = String(env.PROMA_PI_WORKER_REQUIRE_PATH || '').trim();
+      const next = forkProcess(workerPath, [], {
         env: {
           ...process.env,
           ...env,
@@ -80,6 +92,9 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
         },
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
         serialization: 'advanced',
+        ...(workerRequirePath
+          ? { execArgv: [...process.execArgv, '--require', workerRequirePath] }
+          : {}),
       });
       child = next;
       const stderr = [];
@@ -87,10 +102,15 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
         stderr.push(String(chunk));
         if (stderr.length > 20) stderr.shift();
       });
+      let startupFailure = null;
       const timer = setTimeout(() => {
-        reject(piWorkerStartupError(`Pi Worker startup timed out.${stderr.length ? ` ${stderr.join('').slice(-1000)}` : ''}`, 'PI_WORKER_STARTUP_TIMEOUT'));
+        startupFailure = piWorkerStartupError(
+          `Pi Worker startup timed out after ${startupTimeoutMs}ms.${stderr.length ? ` ${stderr.join('').slice(-1000)}` : ''}`,
+          'PI_WORKER_STARTUP_TIMEOUT',
+        );
+        reject(startupFailure);
         next.kill('SIGTERM');
-      }, 20000);
+      }, startupTimeoutMs);
       const onReady = () => {
         clearTimeout(timer);
         emitter.off('ready', onReady);
@@ -100,15 +120,22 @@ export function createPiBridge({ workerPath = path.join(__dirname, 'workers', 'p
       next.on('message', handleMessage);
       next.once('error', (error) => {
         clearTimeout(timer);
-        reject(piWorkerStartupError(error.message || String(error)));
+        emitter.off('ready', onReady);
+        startupFailure = piWorkerStartupError(error.message || String(error));
+        reject(startupFailure);
       });
       next.once('exit', (code, signal) => {
         clearTimeout(timer);
-        const error = piWorkerStartupError(`Pi Worker exited code=${code ?? ''} signal=${signal ?? ''}.${stderr.length ? ` ${stderr.join('').slice(-1000)}` : ''}`);
-        if (!readyInfo) reject(error);
+        emitter.off('ready', onReady);
+        const wasReady = readyInfo !== null;
+        const error = startupFailure || piWorkerStartupError(
+          `Pi Worker exited code=${code ?? ''} signal=${signal ?? ''}.${stderr.length ? ` ${stderr.join('').slice(-1000)}` : ''}`,
+        );
+        if (!wasReady) reject(error);
         failPending(error);
         child = null;
         readyPromise = null;
+        readyInfo = null;
         emitter.emit('exit', error);
       });
     }).finally(() => {

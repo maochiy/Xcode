@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { createPiBridgePool } from './pi-bridge.mjs';
+import {
+  createPiBridge,
+  createPiBridgePool,
+  piWorkerStartupTimeoutMs,
+} from './pi-bridge.mjs';
 
 function createClock() {
   let current = 0;
@@ -85,6 +89,67 @@ function binding(runtimeBuildId = 'pi-build-1') {
     adapterProtocolVersion: 1,
   };
 }
+
+describe('Pi Worker 启动保护', () => {
+  test('Given Windows 启动较慢 When 计算启动超时 Then 允许 60 秒完成初始化', () => {
+    expect(piWorkerStartupTimeoutMs('win32')).toBe(60_000);
+    expect(piWorkerStartupTimeoutMs('darwin')).toBe(20_000);
+  });
+
+  test('Given Worker 启动超时后被 SIGTERM When 上报退出 Then 保留启动超时根因', async () => {
+    const child = new EventEmitter();
+    child.connected = true;
+    child.stderr = new EventEmitter();
+    child.send = () => true;
+    child.kill = (signal) => {
+      child.killedWith = signal;
+      return true;
+    };
+    let forkCount = 0;
+    const bridge = createPiBridge({
+      workerPath: '/tmp/pi-worker.mjs',
+      forkProcess: () => {
+        forkCount += 1;
+        return child;
+      },
+      startupTimeoutMs: 1,
+    });
+    const exits = [];
+    bridge.on('exit', error => exits.push(error));
+
+    await expect(bridge.ensureStarted()).rejects.toThrow('Pi Worker startup timed out');
+    await expect(bridge.ensureStarted()).rejects.toThrow('Pi Worker startup timed out');
+    expect(forkCount).toBe(1);
+    expect(child.killedWith).toBe('SIGTERM');
+    child.connected = false;
+    child.emit('exit', null, 'SIGTERM');
+    expect(exits).toHaveLength(1);
+    expect(exits[0].message).toContain('Pi Worker startup timed out');
+    expect(exits[0].message).not.toContain('signal=SIGTERM');
+  });
+
+  test('Given Windows shim 路径包含空格 When fork Worker Then 通过独立 execArgv 参数加载', async () => {
+    const child = new EventEmitter();
+    child.connected = true;
+    child.stderr = new EventEmitter();
+    child.send = () => true;
+    let forkOptions;
+    const shimPath = 'C:\\Program Files\\Proma\\resources\\pi-worker-compat.cjs';
+    const bridge = createPiBridge({
+      workerPath: 'C:\\Program Files\\Proma\\resources\\pi-worker.mjs',
+      env: { PROMA_PI_WORKER_REQUIRE_PATH: shimPath },
+      forkProcess: (_workerPath, _args, options) => {
+        forkOptions = options;
+        queueMicrotask(() => child.emit('message', { type: 'ready' }));
+        return child;
+      },
+    });
+
+    await bridge.ensureStarted();
+
+    expect(forkOptions.execArgv.slice(-2)).toEqual(['--require', shimPath]);
+  });
+});
 
 describe('Pi Bridge Pool 生命周期', () => {
   test('Given 20 个 Session 使用同一 Runtime Build When 启动 Then 只创建一个 Worker', async () => {

@@ -315,6 +315,8 @@ function IntegratedTerminalContent({
           pendingData.length = 0
           outputQueue.flush()
           scheduleFit()
+          // 面板按钮可能在异步挂载期间重新获得焦点，完成后恢复到 xterm。
+          terminal.focus()
         })
       })
       .catch((cause: unknown) => {

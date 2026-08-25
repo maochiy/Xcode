@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   codexCompactionSettings,
   codexItemToolName,
@@ -7,9 +10,28 @@ import {
   codexItemIsError,
   codexMcpLaunchConfiguration,
   codexQueuedMessageRequest,
+  prepareCodexRuntimeHome,
 } from './frakio-codex-runtime-adapter'
 
+const temporaryDirectories: string[] = []
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 describe('Proma Codex 子 Agent 与工具事件映射', () => {
+  test('Given 新会话的 CODEX_HOME 尚不存在 When 启动 Codex App Server Then 先递归创建目录', () => {
+    const root = mkdtempSync(join(tmpdir(), 'proma-codex-home-'))
+    temporaryDirectories.push(root)
+    const runtimeHome = join(root, 'codex', 'session-1')
+
+    prepareCodexRuntimeHome(runtimeHome)
+
+    expect(existsSync(runtimeHome)).toBe(true)
+  })
+
   test('Given Codex Turn 正在运行 When 用户点击立即发送 Then 使用 turn/steer 注入当前 Turn', () => {
     expect(codexQueuedMessageRequest(
       'thread-1',

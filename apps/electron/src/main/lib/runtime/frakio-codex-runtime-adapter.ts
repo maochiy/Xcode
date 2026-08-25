@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
 import { join } from 'node:path'
 import type {
@@ -402,6 +403,11 @@ export function codexCompactionSettings(
   ]
 }
 
+/** Codex 要求 CODEX_HOME 在进程启动前已经存在，否则 app-server 会直接退出。 */
+export function prepareCodexRuntimeHome(runtimeHome: string): void {
+  mkdirSync(runtimeHome, { recursive: true })
+}
+
 function spawnEnvironment(input: CodexRuntimeQueryOptions, runtimeHome: string): Record<string, string> {
   const route = routeFor(input)
   const mcp = codexMcpLaunchConfiguration(input.mcpServers)
@@ -531,6 +537,7 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
       throw new Error('未发现内置 Codex Runtime。请重新安装 Proma，不要依赖本机 PATH 中的 codex。')
     }
     const runtimeHome = join(getRuntimeSessionsDir(), 'codex', input.sessionId)
+    prepareCodexRuntimeHome(runtimeHome)
     const child = spawn(command, codexArguments(input), {
       cwd: input.cwd || process.cwd(),
       env: spawnEnvironment(input, runtimeHome),

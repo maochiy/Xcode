@@ -759,12 +759,9 @@ export function resolvePiWorkerRuntimeBinding(runtimeHome = ''): PiWorkerRuntime
 function withPiWorkerCompatShim(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const shimPath = findPiWorkerCompatShim()
   if (!shimPath) return env
-  const requireFlag = `--require=${shimPath}`
-  const nodeOptions = env.NODE_OPTIONS || process.env.NODE_OPTIONS || ''
-  if (nodeOptions.split(/\s+/).includes(requireFlag)) return env
   return {
     ...env,
-    NODE_OPTIONS: `${nodeOptions} ${requireFlag}`.trim(),
+    PROMA_PI_WORKER_REQUIRE_PATH: shimPath,
   }
 }
 
