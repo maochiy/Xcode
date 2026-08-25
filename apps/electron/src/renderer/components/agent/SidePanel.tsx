@@ -612,7 +612,9 @@ export function SidePanel({
   return (
     <div
       className={cn(
-        'relative z-0 h-full flex-shrink-0 overflow-hidden titlebar-drag-region bg-content-area',
+        // 只有顶部 34px 的 TabBar 可以拖动窗口。不要把整个侧栏设为 drag：
+        // Windows 的 Chromium hitmask 可能吞掉嵌套 no-drag 区域内的 xterm 键盘焦点。
+        'relative z-0 h-full flex-shrink-0 overflow-hidden bg-content-area',
         isClassic && 'rounded-2xl shadow-xl dark:shadow-md',
         shouldAnimate && 'transition-[width] duration-300 ease-in-out',
         isOpen ? '' : '!w-0',

@@ -168,6 +168,65 @@ describe('smokeTestPromaCli', () => {
       /137|SIGKILL/,
     )
   })
+
+  test('Given 新复制 CLI 首次启动超时 When smoke Then 重试一次并通过', () => {
+    let attempts = 0
+    const run: RunCommand = () => {
+      attempts += 1
+      if (attempts === 1) {
+        const error = new Error('spawnSync ETIMEDOUT') as NodeJS.ErrnoException
+        error.code = 'ETIMEDOUT'
+        return {
+          status: null,
+          signal: 'SIGTERM',
+          error,
+          output: ['', '', ''],
+          pid: 1,
+          stdout: '',
+          stderr: '',
+        }
+      }
+      return {
+        status: 0,
+        signal: null,
+        output: ['', '[]\n', ''],
+        pid: 2,
+        stdout: '[]\n',
+        stderr: '',
+      }
+    }
+
+    const dir = makeTempDir('proma-cli-smoke-')
+    const cliPath = join(dir, 'proma')
+    writeFileSync(cliPath, 'fake')
+
+    smokeTestPromaCli(cliPath, { run, configDir: join(dir, 'cfg') })
+    expect(attempts).toBe(2)
+  })
+
+  test('Given CLI 返回普通失败 When smoke Then 不重试', () => {
+    let attempts = 0
+    const run: RunCommand = () => {
+      attempts += 1
+      return {
+        status: 1,
+        signal: null,
+        output: ['', '', 'invalid command'],
+        pid: 1,
+        stdout: '',
+        stderr: 'invalid command',
+      }
+    }
+
+    const dir = makeTempDir('proma-cli-smoke-')
+    const cliPath = join(dir, 'proma')
+    writeFileSync(cliPath, 'fake')
+
+    expect(() => smokeTestPromaCli(cliPath, { run, configDir: join(dir, 'cfg') })).toThrow(
+      /invalid command/,
+    )
+    expect(attempts).toBe(1)
+  })
 })
 
 describe('ensurePackagedPromaCli', () => {
@@ -193,7 +252,7 @@ describe('ensurePackagedPromaCli', () => {
       ensureMacCliCodeSignature(copyPath)
     }
     smokeTestPromaCli(copyPath)
-  })
+  }, 70_000)
 
   test('Given darwin 产物布局 When ensurePackagedPromaCli Then 走 App Bundle 路径', () => {
     const appOutDir = makeTempDir('proma-pack-darwin-')

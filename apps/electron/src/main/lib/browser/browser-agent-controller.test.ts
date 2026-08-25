@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import type { WebContents } from 'electron'
 
 interface FakeFrame {
   name: string
@@ -22,16 +23,19 @@ interface FakeWebContents {
 
 let activeWebContents: FakeWebContents | null = null
 
-mock.module('electron', () => ({
-  webContents: { fromId: () => activeWebContents },
-}))
-
 const controller = await import('./browser-agent-controller')
 
 describe('Browser Agent 任务生命周期', () => {
   beforeEach(() => {
     activeWebContents = null
     controller.resetBrowserAgentTasksForTest()
+    controller.setBrowserAgentWebContentsResolverForTest(
+      () => activeWebContents as unknown as WebContents | null,
+    )
+  })
+
+  afterEach(() => {
+    controller.setBrowserAgentWebContentsResolverForTest()
   })
 
   test('Given 新任务 When upsert Then 创建为 running 并可按会话列出', () => {

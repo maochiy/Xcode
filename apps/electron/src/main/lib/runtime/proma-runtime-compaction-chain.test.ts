@@ -59,8 +59,8 @@ describe('压缩占比配置端到端传递（模型 → gateway → Claude/Code
     })
     // Codex：model_auto_compact_token_limit 就是阈值
     expect(codexCompactionSettings(compaction)).toEqual([
-      '-c', 'model_auto_compact_token_limit="140000"',
-      '-c', 'model_context_window="200000"',
+      '-c', 'model_auto_compact_token_limit=140000',
+      '-c', 'model_context_window=200000',
     ])
   })
 
@@ -75,8 +75,8 @@ describe('压缩占比配置端到端传递（模型 → gateway → Claude/Code
       autoCompactWindow: 120_000,
     })
     expect(codexCompactionSettings(compaction)).toEqual([
-      '-c', 'model_auto_compact_token_limit="120000"',
-      '-c', 'model_context_window="200000"',
+      '-c', 'model_auto_compact_token_limit=120000',
+      '-c', 'model_context_window=200000',
     ])
   })
 
@@ -88,8 +88,8 @@ describe('压缩占比配置端到端传递（模型 → gateway → Claude/Code
       autoCompactWindow: 800_000,
     })
     expect(codexCompactionSettings(compaction)).toEqual([
-      '-c', 'model_auto_compact_token_limit="800000"',
-      '-c', 'model_context_window="1000000"',
+      '-c', 'model_auto_compact_token_limit=800000',
+      '-c', 'model_context_window=1000000',
     ])
   })
   test('Given 未配置 contextWindow When 计算压缩策略 Then 用默认 200000 窗口同步给两个 Harness', () => {
@@ -100,8 +100,8 @@ describe('压缩占比配置端到端传递（模型 → gateway → Claude/Code
       autoCompactWindow: 160_000,
     })
     expect(codexCompactionSettings(compaction)).toEqual([
-      '-c', 'model_auto_compact_token_limit="160000"',
-      '-c', 'model_context_window="200000"',
+      '-c', 'model_auto_compact_token_limit=160000',
+      '-c', 'model_context_window=200000',
     ])
   })
 })

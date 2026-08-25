@@ -12,10 +12,18 @@
  * 应用启动时运行用户的登录 Shell，提取完整的环境变量
  */
 
-import { execSync } from 'child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { app } from 'electron'
 import type { ShellEnvResult } from '@proma/shared'
 import { loadWindowsEnv } from './windows-env'
+
+const SHELL_ENV_TIMEOUT_MS = 10_000
+const SHELL_ENV_FORCE_KILL_DELAY_MS = 250
+const SHELL_ENV_KILL_DEADLINE_MS = 2_000
+
+interface GetShellEnvOptions {
+  timeoutMs?: number
+}
 
 /**
  * 获取用户默认 Shell 路径
@@ -78,33 +86,144 @@ function parseEnvOutput(output: string): Record<string, string> {
   return env
 }
 
+function killShellProcessGroup(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+): void {
+  if (child.pid == null) {
+    child.kill(signal)
+    return
+  }
+
+  try {
+    // detached 子进程的 pid 同时也是 process group id。
+    // 必须终止整个进程组，否则 Shell 插件产生的后代会继续持有 stdout/stderr，
+    // 导致父进程即使超时退出，Electron 主进程仍一直等待管道关闭。
+    process.kill(-child.pid, signal)
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? error.code : null
+    if (code !== 'ESRCH') {
+      child.kill(signal)
+    }
+  }
+}
+
+function shellEnvTimeoutError(shell: string, timeoutMs: number): NodeJS.ErrnoException {
+  const error = new Error(
+    `从 ${shell} 加载环境变量超时（${timeoutMs}ms），已终止 Shell 进程组`,
+  ) as NodeJS.ErrnoException
+  error.code = 'ETIMEDOUT'
+  return error
+}
+
+/**
+ * 异步执行登录交互 Shell。
+ *
+ * 不能使用 execSync/spawnSync：它们超时时通常只终止直接子进程，
+ * Shell 初始化脚本产生的后代仍可能持有管道，最终让 Electron 启动永久阻塞。
+ */
+export function runShellEnvCommand(
+  shell: string,
+  command: string,
+  timeoutMs = SHELL_ENV_TIMEOUT_MS,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(shell, ['-l', '-i', '-c', command], {
+      detached: true,
+      env: {
+        // 提供最小的初始环境
+        HOME: process.env.HOME,
+        USER: process.env.USER,
+        SHELL: shell,
+        TERM: 'xterm-256color',
+        // 阻止 macOS 弹出“安装命令行开发者工具”对话框
+        APPLE_SUPPRESS_DEVELOPER_TOOL_POPUP: '1',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+    let forceKillTimer: ReturnType<typeof setTimeout> | null = null
+    let killDeadlineTimer: ReturnType<typeof setTimeout> | null = null
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true
+      killShellProcessGroup(child, 'SIGTERM')
+      forceKillTimer = setTimeout(() => {
+        killShellProcessGroup(child, 'SIGKILL')
+      }, SHELL_ENV_FORCE_KILL_DELAY_MS)
+      killDeadlineTimer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        child.stdout.destroy()
+        child.stderr.destroy()
+        reject(shellEnvTimeoutError(shell, timeoutMs))
+      }, SHELL_ENV_KILL_DEADLINE_MS)
+    }, timeoutMs)
+
+    child.once('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (killDeadlineTimer) clearTimeout(killDeadlineTimer)
+      reject(error)
+    })
+
+    child.once('close', (code, signal) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutTimer)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      if (killDeadlineTimer) clearTimeout(killDeadlineTimer)
+
+      if (timedOut) {
+        // 父 Shell 关闭管道后仍可能有忽略 SIGTERM 的后代，补一次进程组清理。
+        killShellProcessGroup(child, 'SIGKILL')
+        reject(shellEnvTimeoutError(shell, timeoutMs))
+        return
+      }
+
+      if (code !== 0) {
+        const detail = stderr.trim() || `signal=${signal ?? 'unknown'}`
+        reject(new Error(`Shell 环境命令执行失败（code=${code ?? 'null'}）：${detail}`))
+        return
+      }
+
+      resolve(stdout)
+    })
+  })
+}
+
 /**
  * 从用户 Shell 获取完整环境变量
  *
  * @param shell - Shell 可执行文件路径
  * @returns 环境变量键值对
  */
-export async function getShellEnv(shell: string): Promise<Record<string, string>> {
+export async function getShellEnv(
+  shell: string,
+  options: GetShellEnvOptions = {},
+): Promise<Record<string, string>> {
   // 使用标记来定位环境变量输出的开始位置
   // 这样可以过滤掉 Shell 启动时的其他输出
   const marker = '__PROMA_ENV_START__'
   const command = `echo ${marker} && env`
 
-  const output = execSync(`${shell} -l -i -c '${command}'`, {
-    encoding: 'utf-8',
-    timeout: 10000, // 10 秒超时
-    env: {
-      // 提供最小的初始环境
-      HOME: process.env.HOME,
-      USER: process.env.USER,
-      SHELL: shell,
-      TERM: 'xterm-256color',
-      // 阻止 macOS 弹出 "安装命令行开发者工具" 对话框
-      APPLE_SUPPRESS_DEVELOPER_TOOL_POPUP: '1',
-      GIT_TERMINAL_PROMPT: '0',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  const output = await runShellEnvCommand(shell, command, options.timeoutMs)
 
   // 找到标记位置，只解析标记之后的内容
   const markerIndex = output.indexOf(marker)

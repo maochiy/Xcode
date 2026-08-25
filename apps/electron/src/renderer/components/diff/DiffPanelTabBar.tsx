@@ -75,6 +75,7 @@ export function DiffPanelTabBar({
   const isClassic = interfaceVariant === 'classic'
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
   const prevTabStateRef = React.useRef<PreviousTabState>({ sessionId: currentSessionId, activeTab })
+  const preventAddMenuFocusRestoreRef = React.useRef(false)
   const [draggingTab, setDraggingTab] = React.useState<AgentSidePanelTab | null>(null)
   const [addMenuOpen, setAddMenuOpen] = React.useState(false)
 
@@ -174,7 +175,13 @@ export function DiffPanelTabBar({
           })}
         </div>
 
-        <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+        <Popover
+          open={addMenuOpen}
+          onOpenChange={(open) => {
+            if (open) preventAddMenuFocusRestoreRef.current = false
+            setAddMenuOpen(open)
+          }}
+        >
           <PopoverTrigger asChild>
             <button
               type="button"
@@ -186,13 +193,24 @@ export function DiffPanelTabBar({
               <Plus className="size-4" />
             </button>
           </PopoverTrigger>
-          <PopoverContent align="start" sideOffset={4} className="w-40 p-1">
+          <PopoverContent
+            align="start"
+            sideOffset={4}
+            className="w-40 p-1"
+            onCloseAutoFocus={(event) => {
+              if (!preventAddMenuFocusRestoreRef.current) return
+              // 只有新建终端时才由 xterm 接管焦点；其它菜单操作保留 Radix 默认行为。
+              preventAddMenuFocusRestoreRef.current = false
+              event.preventDefault()
+            }}
+          >
             {availableTabs.map((tab) => (
               <button
                 key={tab}
                 type="button"
                 className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent/70 focus-visible:bg-accent/70"
                 onClick={() => {
+                  preventAddMenuFocusRestoreRef.current = tab === 'terminal'
                   onTabAdd(tab)
                   setAddMenuOpen(false)
                 }}

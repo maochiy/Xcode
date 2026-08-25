@@ -14,7 +14,7 @@
  * - 用户手动打开的 Tab 不受影响
  */
 
-import { webContents } from 'electron'
+import * as electron from 'electron'
 import type { WebContents, WebFrameMain } from 'electron'
 import type {
   BrowserAgentActionResult,
@@ -31,6 +31,12 @@ const STALE_TASK_TTL_MS = 10 * 60 * 1000
 type TaskUpdatedListener = (task: BrowserAgentTask) => void
 
 type BrowserAgentTaskRecord = BrowserAgentTask
+type WebContentsResolver = (guestId: number) => WebContents | null
+
+const defaultWebContentsResolver: WebContentsResolver = (guestId) => (
+  electron.webContents?.fromId(guestId) ?? null
+)
+let resolveWebContents = defaultWebContentsResolver
 
 /** 请求渲染层打开任务浏览器页面（Main → Renderer） */
 type OpenTaskListener = (task: BrowserAgentTask) => void
@@ -274,7 +280,7 @@ async function ensureGuestReady(taskId: string): Promise<boolean> {
 function getGuest(taskId: string): WebContents | null {
   const task = tasks.get(taskId)
   if (!task || task.guestId == null) return null
-  const contents = webContents.fromId(task.guestId)
+  const contents = resolveWebContents(task.guestId)
   return contents && !contents.isDestroyed() ? contents : null
 }
 
@@ -613,4 +619,11 @@ export function resetBrowserAgentTasksForTest(): void {
   guestToTask.clear()
   bindWaiters.clear()
   taskElementFrames.clear()
+}
+
+/** 测试辅助：隔离 Electron webContents 全局对象。 */
+export function setBrowserAgentWebContentsResolverForTest(
+  resolver?: WebContentsResolver,
+): void {
+  resolveWebContents = resolver ?? defaultWebContentsResolver
 }

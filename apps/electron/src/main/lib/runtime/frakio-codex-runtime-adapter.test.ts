@@ -3,14 +3,18 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  appendCodexStderrTail,
   codexCompactionSettings,
   codexItemToolName,
   codexItemToolInput,
   codexItemToolResultText,
   codexItemIsError,
   codexMcpLaunchConfiguration,
+  codexProcessExitError,
   codexQueuedMessageRequest,
+  consumeCodexStderrLines,
   prepareCodexRuntimeHome,
+  redactCodexDiagnostic,
 } from './frakio-codex-runtime-adapter'
 
 const temporaryDirectories: string[] = []
@@ -126,8 +130,8 @@ describe('Proma Codex 子 Agent 与工具事件映射', () => {
       contextWindow: 200_000,
     })
     expect(args).toEqual([
-      '-c', 'model_auto_compact_token_limit="160000"',
-      '-c', 'model_context_window="200000"',
+      '-c', 'model_auto_compact_token_limit=160000',
+      '-c', 'model_context_window=200000',
     ])
   })
 
@@ -138,7 +142,46 @@ describe('Proma Codex 子 Agent 与工具事件映射', () => {
 
   test('Given 仅配置窗口无阈值 When 构建 Codex 参数 Then 只注入窗口', () => {
     const args = codexCompactionSettings({ enabled: true, contextWindow: 200_000 })
-    expect(args).toEqual(['-c', 'model_context_window="200000"'])
+    expect(args).toEqual(['-c', 'model_context_window=200000'])
+  })
+
+  test('Given Codex 因配置类型错误退出 When 生成错误 Then 包含脱敏后的真实 stderr', () => {
+    const error = codexProcessExitError(
+      1,
+      null,
+      'invalid type: string "160000", expected i64; Authorization: Bearer secret-token',
+      ['secret-token'],
+    )
+
+    expect(error.message).toContain('code=1')
+    expect(error.message).toContain('expected i64')
+    expect(error.message).not.toContain('secret-token')
+  })
+
+  test('Given stderr 超过上限 When 持续追加 Then 只保留最后 4KB', () => {
+    const tail = appendCodexStderrTail('a'.repeat(4090), `prefix-${'b'.repeat(100)}`)
+
+    expect(tail.length).toBe(4096)
+    expect(tail.endsWith('b'.repeat(100))).toBe(true)
+  })
+
+  test('Given stderr 含渠道凭证 When 记录诊断 Then 凭证不会进入日志或界面', () => {
+    const diagnostic = redactCodexDiagnostic(
+      'api_key=sk-test-123 Authorization: Bearer bearer-value',
+      ['sk-test-123'],
+    )
+
+    expect(diagnostic).not.toContain('sk-test-123')
+    expect(diagnostic).not.toContain('bearer-value')
+  })
+
+  test('Given 凭证被 stderr chunk 拆开 When 按完整行消费 Then 脱敏前不会提前输出片段', () => {
+    const first = consumeCodexStderrLines('', 'api_key=sk-')
+    const second = consumeCodexStderrLines(first.remainder, 'split-secret\n')
+
+    expect(first.lines).toEqual([])
+    expect(second.lines).toEqual(['api_key=sk-split-secret'])
+    expect(redactCodexDiagnostic(second.lines[0]!, ['sk-split-secret'])).not.toContain('sk-split-secret')
   })
 
   test('Given 工作区 stdio MCP When 构建 Codex 启动参数 Then 保留命令参数和环境变量', () => {

@@ -48,6 +48,7 @@ export interface SmokeTestPromaCliOptions {
 }
 
 const DEFAULT_SMOKE_TIMEOUT_MS = 30_000
+const MAX_SMOKE_ATTEMPTS = 2
 
 function defaultRun(options: RunCommandOptions): SpawnSyncReturns<string> {
   return spawnSync(options.command, options.args, {
@@ -162,9 +163,16 @@ function formatSpawnFailure(result: SpawnSyncReturns<string>): string {
   return output || `exit ${result.status ?? 'null'}`
 }
 
+function isSpawnTimeout(result: SpawnSyncReturns<string>): boolean {
+  const error = result.error as NodeJS.ErrnoException | undefined
+  return error?.code === 'ETIMEDOUT'
+}
+
 /**
  * 对 proma CLI 做轻量 smoke：session list --limit 1 --json。
  * 使用临时 --config-dir，不依赖本机真实会话数据。
+ * macOS 新复制的大体积 Bun 单文件首次执行可能受代码签名校验和磁盘压力影响；
+ * 仅在首次超时时重试一次，真实异常仍会中断打包。
  */
 export function smokeTestPromaCli(
   cliPath: string,
@@ -185,24 +193,31 @@ export function smokeTestPromaCli(
     const env: NodeJS.ProcessEnv = { ...process.env }
     delete env.PROMA_DEV
 
-    const result = run({
-      command: cliPath,
-      args: [
-        'session',
-        'list',
-        '--limit',
-        '1',
-        '--json',
-        '--config-dir',
-        tempConfigDir,
-      ],
-      timeoutMs,
-      env,
-    })
+    let result: SpawnSyncReturns<string> | undefined
+    for (let attempt = 1; attempt <= MAX_SMOKE_ATTEMPTS; attempt += 1) {
+      result = run({
+        command: cliPath,
+        args: [
+          'session',
+          'list',
+          '--limit',
+          '1',
+          '--json',
+          '--config-dir',
+          tempConfigDir,
+        ],
+        timeoutMs,
+        env,
+      })
+      if (!isSpawnTimeout(result) || attempt === MAX_SMOKE_ATTEMPTS) break
+      console.warn(`[proma CLI] smoke test 首次启动超时，重试一次: ${cliPath}`)
+    }
 
-    if (result.status !== 0) {
+    if (!result || result.status !== 0) {
       throw new Error(
-        `proma CLI smoke test 失败 (${cliPath}): ${formatSpawnFailure(result)}`,
+        `proma CLI smoke test 失败 (${cliPath}): ${
+          result ? formatSpawnFailure(result) : '未执行'
+        }`,
       )
     }
 

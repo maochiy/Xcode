@@ -36,9 +36,15 @@ interface PendingRequest {
 }
 
 interface CodexSession {
+  sessionId: string
   child: ChildProcessWithoutNullStreams
   lines: Interface
   queue: MessageQueue | null
+  stderrTail: string
+  stderrLogRemainder: string
+  diagnosticSecrets: string[]
+  expectedShutdown: boolean
+  terminalError: Error | null
   threadId: string
   turnId: string
   turnState: 'starting' | 'active' | 'completed'
@@ -67,6 +73,8 @@ interface CodexMcpLaunchConfiguration {
   args: string[]
   env: Record<string, string>
 }
+
+const CODEX_STDERR_TAIL_LIMIT = 4 * 1024
 
 export function codexQueuedMessageRequest(
   threadId: string,
@@ -293,6 +301,11 @@ function tomlStringMap(value: Record<string, string>): string {
     .join(',')}}`
 }
 
+function codexSetting(key: string, value: string | number): string[] {
+  const tomlValue = typeof value === 'number' ? String(value) : JSON.stringify(value)
+  return ['-c', `${key}=${tomlValue}`]
+}
+
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return Object.fromEntries(
@@ -365,18 +378,17 @@ export function codexMcpLaunchConfiguration(
 
 function codexArguments(input: CodexRuntimeQueryOptions): string[] {
   const route = routeFor(input)
-  const setting = (key: string, value: string): string[] => ['-c', `${key}=${JSON.stringify(value)}`]
   const mcp = codexMcpLaunchConfiguration(input.mcpServers)
   return [
-    ...setting('model_provider', 'proma'),
-    ...setting('model', input.modelRoute?.modelId || input.model || ''),
-    ...setting('model_providers.proma.name', 'Proma Runtime'),
-    ...setting('model_providers.proma.base_url', route.baseUrl),
-    ...setting('model_providers.proma.env_key', 'PROMA_RUNTIME_API_KEY'),
-    ...setting('model_providers.proma.wire_api', 'responses'),
+    ...codexSetting('model_provider', 'proma'),
+    ...codexSetting('model', input.modelRoute?.modelId || input.model || ''),
+    ...codexSetting('model_providers.proma.name', 'Proma Runtime'),
+    ...codexSetting('model_providers.proma.base_url', route.baseUrl),
+    ...codexSetting('model_providers.proma.env_key', 'PROMA_RUNTIME_API_KEY'),
+    ...codexSetting('model_providers.proma.wire_api', 'responses'),
     // 后台 Codex 的自动压缩：把用户对模型配置的压缩策略同步过去，
     // 达到阈值自动压缩上下文，压缩事件不进入主会话 UI。
-    ...codexCompactionSettings(input.modelRoute?.compaction, setting),
+    ...codexCompactionSettings(input.modelRoute?.compaction),
     ...mcp.args,
     'app-server',
   ]
@@ -390,15 +402,14 @@ function codexArguments(input: CodexRuntimeQueryOptions): string[] {
  */
 export function codexCompactionSettings(
   compaction: RuntimeModelRoute['compaction'] | undefined,
-  setting: (key: string, value: string) => string[] = (key, value) => ['-c', `${key}=${JSON.stringify(value)}`],
 ): string[] {
   if (!compaction) return []
   return [
     ...(compaction.threshold != null
-      ? setting('model_auto_compact_token_limit', String(compaction.threshold))
+      ? codexSetting('model_auto_compact_token_limit', compaction.threshold)
       : []),
     ...(compaction.contextWindow != null
-      ? setting('model_context_window', String(compaction.contextWindow))
+      ? codexSetting('model_context_window', compaction.contextWindow)
       : []),
   ]
 }
@@ -406,6 +417,52 @@ export function codexCompactionSettings(
 /** Codex 要求 CODEX_HOME 在进程启动前已经存在，否则 app-server 会直接退出。 */
 export function prepareCodexRuntimeHome(runtimeHome: string): void {
   mkdirSync(runtimeHome, { recursive: true })
+}
+
+export function appendCodexStderrTail(current: string, chunk: string): string {
+  return `${current}${chunk}`.slice(-CODEX_STDERR_TAIL_LIMIT)
+}
+
+export function consumeCodexStderrLines(
+  remainder: string,
+  chunk: string,
+  flush = false,
+): { lines: string[]; remainder: string } {
+  const parts = `${remainder}${chunk}`.split(/\r?\n/)
+  const nextRemainder = flush ? '' : parts.pop() ?? ''
+  return {
+    lines: parts.filter((line) => line.length > 0),
+    remainder: nextRemainder.slice(-CODEX_STDERR_TAIL_LIMIT),
+  }
+}
+
+export function redactCodexDiagnostic(message: string, secrets: readonly string[]): string {
+  let result = message
+  for (const secret of secrets) {
+    if (secret.length >= 4) result = result.split(secret).join('[已脱敏]')
+  }
+  return result
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [已脱敏]')
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|auth(?:orization)?|secret)\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,}]+)/gi,
+      '$1[已脱敏]',
+    )
+    .trim()
+}
+
+export function codexProcessExitError(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderrTail: string,
+  secrets: readonly string[],
+): Error {
+  const diagnostic = redactCodexDiagnostic(stderrTail, secrets)
+  const exit = code == null ? `signal=${signal ?? 'unknown'}` : `code=${code}`
+  return new Error(
+    diagnostic
+      ? `Codex App Server 已退出，${exit}\n${diagnostic}`
+      : `Codex App Server 已退出，${exit}`,
+  )
 }
 
 function spawnEnvironment(input: CodexRuntimeQueryOptions, runtimeHome: string): Record<string, string> {
@@ -420,6 +477,43 @@ function spawnEnvironment(input: CodexRuntimeQueryOptions, runtimeHome: string):
       PROMA_RUNTIME_API_KEY: route.token,
     }).filter((entry): entry is [string, string] => entry[1] !== undefined),
   )
+}
+
+function diagnosticSecrets(input: CodexRuntimeQueryOptions): string[] {
+  const route = routeFor(input)
+  const mcp = codexMcpLaunchConfiguration(input.mcpServers)
+  const sensitiveKey = /(?:key|token|auth|secret|password|cookie|credential|session)/i
+  const inheritedSecrets = Object.entries(process.env)
+    .filter(([key, value]) => value && sensitiveKey.test(key))
+    .map(([, value]) => value as string)
+  const inputSecrets = Object.entries(input.env ?? {})
+    .filter(([key, value]) => value && sensitiveKey.test(key))
+    .map(([, value]) => value as string)
+  const stdioMcpSecrets = Object.values(input.mcpServers ?? {}).flatMap((rawConfig) => {
+    if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) return []
+    return Object.values(stringRecord((rawConfig as Record<string, unknown>).env))
+  })
+  return Array.from(new Set([
+    route.token,
+    ...Object.values(mcp.env),
+    ...stdioMcpSecrets,
+    ...inputSecrets,
+    ...inheritedSecrets,
+  ].filter((secret) => secret.length >= 4)))
+}
+
+function rejectPendingRequests(session: CodexSession, error: Error): void {
+  for (const pending of session.pending.values()) {
+    clearTimeout(pending.timer)
+    pending.reject(error)
+  }
+  session.pending.clear()
+}
+
+function failCodexSession(session: CodexSession, error: Error): void {
+  if (session.expectedShutdown || session.terminalError) return
+  session.terminalError = error
+  rejectPendingRequests(session, error)
 }
 
 export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
@@ -467,11 +561,8 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
   async closeSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    for (const pending of session.pending.values()) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error('Codex Runtime Session 已关闭。'))
-    }
-    session.pending.clear()
+    session.expectedShutdown = true
+    rejectPendingRequests(session, new Error('Codex Runtime Session 已关闭。'))
     session.lines.close()
     if (!session.child.killed) session.child.kill('SIGTERM')
     this.sessions.delete(sessionId)
@@ -544,9 +635,15 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const session: CodexSession = {
+      sessionId: input.sessionId,
       child,
       lines: createInterface({ input: child.stdout }),
       queue,
+      stderrTail: '',
+      stderrLogRemainder: '',
+      diagnosticSecrets: diagnosticSecrets(input),
+      expectedShutdown: false,
+      terminalError: null,
       threadId: '',
       turnId: '',
       turnState: 'starting',
@@ -561,10 +658,22 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
     }
     this.sessions.set(input.sessionId, session)
     session.lines.on('line', (line) => this.handleLine(session, input.sessionId, line))
-    child.stderr.on('data', (chunk: Buffer) => console.warn(`[Proma Codex Runtime] ${String(chunk).trim()}`))
-    child.once('error', (error) => queue.fail(error))
-    child.once('exit', (code) => {
-      if (code && session.queue) session.queue.fail(new Error(`Codex App Server 已退出，code=${code}`))
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = String(chunk)
+      session.stderrTail = appendCodexStderrTail(session.stderrTail, text)
+      this.logCodexStderr(session, text)
+    })
+    child.once('error', (error) => {
+      failCodexSession(session, error)
+    })
+    child.once('close', (code, signal) => {
+      this.logCodexStderr(session, '', true)
+      if (session.expectedShutdown) return
+      const error = codexProcessExitError(code, signal, session.stderrTail, session.diagnosticSecrets)
+      failCodexSession(session, error)
+      if (this.sessions.get(session.sessionId) === session) {
+        this.sessions.delete(session.sessionId)
+      }
     })
     await this.request(session, 'initialize', {
       clientInfo: { name: 'proma', title: 'Proma', version: '0.16.2' },
@@ -576,6 +685,10 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
   private waitForTurn(session: CodexSession, sessionId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const poll = (): void => {
+        if (session.terminalError) {
+          reject(session.terminalError)
+          return
+        }
         if (!this.sessions.has(sessionId)) {
           reject(new Error('Codex Session 已关闭。'))
           return
@@ -590,6 +703,14 @@ export class FrakioCodexRuntimeAdapter implements AgentProviderAdapter {
       }
       poll()
     })
+  }
+
+  private logCodexStderr(session: CodexSession, chunk: string, flush = false): void {
+    const consumed = consumeCodexStderrLines(session.stderrLogRemainder, chunk, flush)
+    session.stderrLogRemainder = consumed.remainder
+    for (const line of consumed.lines) {
+      console.warn(`[Proma Codex Runtime] ${redactCodexDiagnostic(line, session.diagnosticSecrets)}`)
+    }
   }
 
   private handleLine(session: CodexSession, sessionId: string, line: string): void {

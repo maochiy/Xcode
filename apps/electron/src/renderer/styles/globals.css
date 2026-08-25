@@ -71,6 +71,18 @@
   background: hsl(var(--content-area));
 }
 
+.integrated-terminal-surface,
+.integrated-terminal-surface [data-codex-xterm],
+.integrated-terminal-surface .xterm,
+.integrated-terminal-surface .xterm-helper-textarea {
+  /*
+   * Windows 的 Electron app-region hitmask 不可靠地处理 drag 内嵌 no-drag。
+   * 终端整棵交互树必须显式排除，避免隐藏 textarea 看似聚焦却收不到键盘事件。
+   */
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 .integrated-terminal-surface .xterm,
 .integrated-terminal-surface .xterm-screen,
 .integrated-terminal-surface .xterm-viewport {

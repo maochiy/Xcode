@@ -211,6 +211,7 @@ function IntegratedTerminalContent({
 
     let disposed = false
     let resizeFrame = 0
+    let focusRetryTimer: number | null = null
     let replayReady = false
     const layoutCoordinator = new IntegratedTerminalLayoutCoordinator()
     const pendingData: Array<{ data: string; sequence: number }> = []
@@ -226,6 +227,9 @@ function IntegratedTerminalContent({
       !disposed
       && terminalRef.current === terminal
       && Boolean(terminal.element?.isConnected)
+    const focusTerminal = (): void => {
+      if (isTerminalReady()) terminal.focus()
+    }
     const writeData = (data: string, sequence: number): void => {
       if (sequence <= attachedSequenceRef.current) return
       attachedSequenceRef.current = sequence
@@ -235,7 +239,7 @@ function IntegratedTerminalContent({
       if (!isTerminalReady()) return
       const layoutAction = layoutCoordinator.update(host.clientWidth, host.clientHeight)
       if (!layoutAction.shouldFit) return
-      if (layoutAction.shouldFocus) terminal.focus()
+      if (layoutAction.shouldFocus) focusTerminal()
       fitAddon.fit()
       void window.electronAPI.resizeIntegratedTerminal(
         terminalSessionId,
@@ -252,6 +256,7 @@ function IntegratedTerminalContent({
 
     const resizeObserver = new ResizeObserver(scheduleFit)
     resizeObserver.observe(host)
+    host.addEventListener('pointerdown', focusTerminal, true)
     scheduleFit()
     const dataDisposable = terminal.onData((data) => {
       void window.electronAPI.writeIntegratedTerminal(terminalSessionId, data)
@@ -315,8 +320,10 @@ function IntegratedTerminalContent({
           pendingData.length = 0
           outputQueue.flush()
           scheduleFit()
-          // 面板按钮可能在异步挂载期间重新获得焦点，完成后恢复到 xterm。
-          terminal.focus()
+          // Radix Popover 关闭和 Windows app-region hitmask 都可能在异步挂载后抢回焦点。
+          // 先立即聚焦，再跨过一次 UI 收尾周期重试，保证打开终端后可以直接输入。
+          focusTerminal()
+          focusRetryTimer = window.setTimeout(focusTerminal, 80)
         })
       })
       .catch((cause: unknown) => {
@@ -326,9 +333,11 @@ function IntegratedTerminalContent({
     return () => {
       disposed = true
       cancelAnimationFrame(resizeFrame)
+      if (focusRetryTimer !== null) window.clearTimeout(focusRetryTimer)
       outputQueue.dispose()
       unsubscribe()
       resizeObserver.disconnect()
+      host.removeEventListener('pointerdown', focusTerminal, true)
       dataDisposable.dispose()
       titleDisposable.dispose()
       terminal.dispose()
