@@ -1,12 +1,11 @@
 /**
  * Bash 工具结果渲染器 — 终端风格
  *
- * 深色背景、等宽字体、stderr 红色高亮
+ * 主题自适应背景、等宽字体、stderr 红色高亮
  */
 
 import * as React from 'react'
 import { cn } from '@/lib/utils'
-import { CollapsibleResult } from './collapsible-result'
 
 interface BashResultRendererProps {
   result: string
@@ -33,44 +32,38 @@ function classifyLine(line: string): 'stderr' | 'normal' {
 
 export function BashResultRenderer({ result, isError, input }: BashResultRendererProps): React.ReactElement {
   const command = typeof input.command === 'string' ? input.command : undefined
-
-  const renderTerminal = React.useCallback((text: string): React.ReactNode => {
-    const lines = text.split('\n')
-    return (
-      <div className={cn(
-        'rounded-md font-mono text-[12px] leading-relaxed overflow-x-auto',
-        'bg-zinc-900 text-zinc-100 dark:bg-zinc-950',
-        'p-3',
-      )}>
-        {/* 命令回显 */}
-        {command && (
-          <div className="text-zinc-500 mb-2 select-none">
-            <span className="text-green-400">$</span> {command}
-          </div>
-        )}
-        {/* 输出行 */}
-        {lines.map((line, i) => {
-          const type = isError ? 'stderr' : classifyLine(line)
-          return (
-            <div
-              key={i}
-              className={cn(
-                'whitespace-pre-wrap break-all min-h-[1.25em]',
-                type === 'stderr' && 'text-red-400',
-              )}
-            >
-              {line || '\u200B'}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }, [command, isError])
+  const lines = result.split('\n')
 
   return (
-    <CollapsibleResult
-      content={result}
-      renderContent={renderTerminal}
-    />
+    <div
+      aria-label="终端输出"
+      className={cn(
+        'max-h-[300px] overflow-auto rounded-md bg-muted/50 p-3',
+        'font-mono text-[12px] leading-relaxed text-foreground/85',
+        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+      )}
+      role="log"
+      tabIndex={0}
+    >
+      {command && (
+        <div className="mb-2 select-none text-muted-foreground">
+          <span className="text-emerald-600 dark:text-emerald-400">$</span> {command}
+        </div>
+      )}
+      {lines.map((line, index) => {
+        const type = isError ? 'stderr' : classifyLine(line)
+        return (
+          <div
+            key={index}
+            className={cn(
+              'min-h-[1.25em] whitespace-pre-wrap break-all',
+              type === 'stderr' && 'text-destructive dark:text-red-400',
+            )}
+          >
+            {line || '\u200B'}
+          </div>
+        )
+      })}
+    </div>
   )
 }

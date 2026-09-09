@@ -59,12 +59,25 @@ describe('Proma Pi Runtime 模型可见品牌', () => {
     expect(source).not.toContain('Frakio Work')
   })
 
-  test('Given steering 消息真正进入 Pi 上下文 When 转发事件 Then 宿主可切换新的回复分段', () => {
+  test('Given Pi 原生消息边界 When 转发事件 Then 使用稳定身份的 transcript 而非累计整轮分段', () => {
     const source = readRuntime('workers/pi-worker.mjs')
-    expect(source).toContain("let userPromptSeen = false")
-    expect(source).toContain('if (userPromptSeen)')
-    expect(source).toContain("event.message?.role === 'user'")
-    expect(source).toContain("type: 'run.turn.started'")
+    const transcript = readRuntime('workers/pi-transcript.mjs')
+    expect(source).toContain('transcript.handle(event)')
+    expect(source).toContain("type: 'transcript.message'")
+    expect(transcript).toContain('session.agent.steer(message)')
+    expect(transcript).toContain('_promaMessageUuid')
+    expect(source).not.toContain("type: 'run.turn.started'")
+  })
+
+  test('Given 模型只结束 reasoning When 尚无最终正文 Then 使用隐藏消息有限续写', () => {
+    const source = readRuntime('workers/pi-worker.mjs')
+    expect(source).toContain('reasoningOnlyContinuationDecision')
+    expect(source).toContain("customType: 'proma_internal_continuation'")
+    expect(source).toContain('display: false')
+    expect(source).toContain("{ deliverAs: 'followUp' }")
+    expect(source).not.toContain('{ triggerTurn: true }')
+    expect(source).toContain("'run.reasoning_only_continuation'")
+    expect(source).toContain("reasoningOnlyDecision.action === 'fail' && !publishedArtifact")
   })
 
   test('Given Context Packet V2 When 写入 receipt Then deliveryMode 为 proma_full', () => {

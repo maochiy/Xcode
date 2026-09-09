@@ -16,7 +16,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { BROWSER_IPC_CHANNELS, browserPartitionForSession } from '@proma/shared'
+import { BROWSER_IPC_CHANNELS, browserPartitionForSession, normalizeBrowserNavigationUrl } from '@proma/shared'
 import type { BrowserAnnotationMode } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,16 +37,11 @@ type BrowserGuest = HTMLElement & {
   send: (channel: string, ...args: unknown[]) => void
 }
 
-function normalizeUrl(value: string): string | null {
-  const raw = value.trim()
-  if (!raw) return null
-  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
-  try {
-    const url = new URL(candidate)
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null
-  } catch {
-    return null
-  }
+function initialNavigationUrl(value?: string): string {
+  const raw = value?.trim()
+  if (!raw) return DEFAULT_URL
+  if (raw === 'about:blank') return raw
+  return normalizeBrowserNavigationUrl(raw) || DEFAULT_URL
 }
 
 function annotationLabel(annotation: {
@@ -64,15 +59,25 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
   const partition = React.useMemo(() => browserPartitionForSession(sessionId), [sessionId])
   // 使用 useRef 保持上一次的 sessionId 和 URL，避免会话切换时重新加载
   const prevSessionIdRef = React.useRef<string>(sessionId)
-  const prevUrlRef = React.useRef<string>(initialUrl || DEFAULT_URL)
-  const [url, setUrl] = React.useState(prevUrlRef.current)
-  const [inputUrl, setInputUrl] = React.useState(prevUrlRef.current)
+  const startUrl = initialNavigationUrl(initialUrl)
+  const prevUrlRef = React.useRef<string>(startUrl)
+  // committedSrc 只在用户/Agent 主动导航时更新；页面自己的跳转只改地址栏，避免 src 回写把当前加载 abort 掉。
+  const [committedSrc, setCommittedSrc] = React.useState(startUrl)
+  const [displayUrl, setDisplayUrl] = React.useState(startUrl)
+  const [inputUrl, setInputUrl] = React.useState(startUrl)
+  const isWebviewHoveredRef = React.useRef(false)
+
+  const setBrowserScrollbarVisible = React.useCallback((visible: boolean): void => {
+    isWebviewHoveredRef.current = visible
+    webviewRef.current?.send(BROWSER_IPC_CHANNELS.SET_SCROLLBAR_VISIBLE, visible)
+  }, [])
 
   // 当 sessionId 变化时，保持 webview 状态，不重新加载
   React.useEffect(() => {
     if (prevSessionIdRef.current !== sessionId) {
       // 会话切换了，恢复之前的 URL，不重新加载
-      setUrl(prevUrlRef.current)
+      setCommittedSrc(prevUrlRef.current)
+      setDisplayUrl(prevUrlRef.current)
       setInputUrl(prevUrlRef.current)
       prevSessionIdRef.current = sessionId
     }
@@ -93,13 +98,14 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
   const allAnnotations = useAtomValue(browserAnnotationsAtomFamily(sessionId))
 
   const navigate = React.useCallback((value: string): void => {
-    const normalized = normalizeUrl(value)
+    const normalized = normalizeBrowserNavigationUrl(value)
     if (!normalized) {
       setBrowserError('请输入 http 或 https 网页地址。')
       return
     }
     setBrowserError('')
-    setUrl(normalized)
+    setCommittedSrc(normalized)
+    setDisplayUrl(normalized)
     setInputUrl(normalized)
     prevUrlRef.current = normalized
   }, [])
@@ -158,16 +164,27 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
     if (!guest) return
     const handleStart = (): void => setIsLoading(true)
     const handleStop = (): void => setIsLoading(false)
+    const handleDomReady = (): void => {
+      if (isWebviewHoveredRef.current) {
+        guest.send(BROWSER_IPC_CHANNELS.SET_SCROLLBAR_VISIBLE, true)
+      }
+    }
     const handleNavigate = (event: Event): void => {
       const nextUrl = (event as Event & { url?: string }).url
       if (!nextUrl) return
-      setUrl(nextUrl)
+      setDisplayUrl(nextUrl)
       setInputUrl(nextUrl)
       prevUrlRef.current = nextUrl
     }
+    const handlePointerEnter = (): void => setBrowserScrollbarVisible(true)
+    const handlePointerLeave = (): void => setBrowserScrollbarVisible(false)
+    guest.addEventListener('pointerenter', handlePointerEnter)
+    guest.addEventListener('pointerleave', handlePointerLeave)
     guest.addEventListener('did-start-loading', handleStart)
     guest.addEventListener('did-stop-loading', handleStop)
+    guest.addEventListener('dom-ready', handleDomReady)
     guest.addEventListener('did-navigate', handleNavigate)
+    guest.addEventListener('did-navigate-in-page', handleNavigate)
     const removeAnnotationListener = window.electronAPI.onBrowserAnnotationCreated((event) => {
       const annotation = event.annotation
       const key = browserAnnotationKey(annotation)
@@ -185,13 +202,17 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
       setBrowserError(event.error || '浏览器操作失败。')
     })
     return () => {
+      guest.removeEventListener('pointerenter', handlePointerEnter)
+      guest.removeEventListener('pointerleave', handlePointerLeave)
       guest.removeEventListener('did-start-loading', handleStart)
       guest.removeEventListener('did-stop-loading', handleStop)
+      guest.removeEventListener('dom-ready', handleDomReady)
       guest.removeEventListener('did-navigate', handleNavigate)
+      guest.removeEventListener('did-navigate-in-page', handleNavigate)
       removeAnnotationListener()
       removeErrorListener()
     }
-  }, [setAnnotations, setSelectedIds])
+  }, [setAnnotations, setBrowserScrollbarVisible, setSelectedIds])
 
   const toggleSelected = (annotation: (typeof annotations)[number]): void => {
     const key = browserAnnotationKey(annotation)
@@ -241,7 +262,7 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
             <Input value={inputUrl} onChange={(event) => setInputUrl(event.target.value)} className="h-7 pl-8 text-xs" aria-label="浏览器地址" />
           </div>
         </form>
-        <Button variant="ghost" size="icon-sm" aria-label="在系统浏览器打开" onClick={() => void window.electronAPI.openExternal(url)}><ExternalLink /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="在系统浏览器打开" onClick={() => void window.electronAPI.openExternal(displayUrl)}><ExternalLink /></Button>
       </div>
 
       <div className="flex shrink-0 items-center gap-1 border-b border-border/30 px-2 py-1">
@@ -273,8 +294,22 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
         <div className="shrink-0 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">{browserError}</div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col">
-        <webview key={partition} ref={webviewRef} src={url} partition={partition} className="min-h-0 flex-1" allowpopups={false} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div
+          className="flex min-h-0 flex-1 flex-col"
+          onPointerEnter={() => setBrowserScrollbarVisible(true)}
+          onPointerLeave={() => setBrowserScrollbarVisible(false)}
+        >
+          {/* React 会丢弃未知属性的布尔值；显式写入字符串，让新窗口请求交给主进程校验并在当前页打开。 */}
+          {React.createElement('webview', {
+            key: partition,
+            ref: webviewRef,
+            src: committedSrc,
+            partition,
+            className: 'min-h-0 flex-1',
+            allowpopups: '',
+          })}
+        </div>
         {annotations.length > 0 && (
           <div className="max-h-44 shrink-0 space-y-1 overflow-y-auto border-t border-border/50 bg-muted/15 p-2">
             <div className="flex items-center gap-1 px-1 text-[10px] font-medium text-muted-foreground">
@@ -305,7 +340,7 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
       </div>
 
       <div className="flex shrink-0 items-center gap-1 border-t border-border/30 px-3 py-1 text-[10px] text-muted-foreground">
-        <ShieldCheck className="size-3 text-emerald-500" /> Proma Browser 安全隔离已启用
+        <ShieldCheck className="size-3 text-emerald-500" /> Xcode Browser 安全隔离已启用
       </div>
     </div>
   )

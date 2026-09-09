@@ -8,13 +8,6 @@ import {
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import pkg from '../package.json' with { type: 'json' }
-import { validateCcbRuntimeArtifact } from '../src/main/lib/ccb-runtime/artifact-validator'
-import {
-  CCB_PROTOCOL_VERSION,
-  EXPECTED_CCB_RUNTIME_COMMIT,
-  EXPECTED_CCB_RUNTIME_VERSION,
-} from '../src/main/lib/ccb-runtime/protocol'
-import { refreshSignedRuntimeManifest } from './runtime-manifest-refresh'
 import {
   ensureLocalCodeSigningIdentity,
   type LocalCodeSigningIdentity,
@@ -22,18 +15,17 @@ import {
 import { smokeTestPromaCli } from './packaged-cli-guard'
 
 const appDir = resolve(import.meta.dir, '..')
-const defaultAppPath = join(appDir, 'out', `mac-${process.arch}`, 'Proma.app')
+const defaultAppPath = join(appDir, 'out', `mac-${process.arch}`, 'Xcode-Desktop.app')
 const appPath = resolve(process.argv[2] ?? defaultAppPath)
 const outputDmgPath = resolve(
   process.argv[3]
     ?? join(
       appDir,
       'out',
-      `Proma-${pkg.version}-${process.arch}-local-signed.dmg`,
+      `Xcode-${pkg.version}-${process.arch}-local-signed.dmg`,
     ),
 )
 const entitlementsPath = join(appDir, 'resources', 'entitlements.mac.plist')
-const runtimeRoot = join(appPath, 'Contents', 'Resources', 'ccb-runtime')
 
 function run(command: string, args: string[]): string {
   const result = spawnSync(command, args, {
@@ -119,9 +111,6 @@ function main(): void {
   if (!existsSync(appPath)) {
     throw new Error(`未找到待签名 App: ${appPath}`)
   }
-  if (!existsSync(runtimeRoot)) {
-    throw new Error(`App 中缺少 CCB Runtime: ${runtimeRoot}`)
-  }
   const identity = ensureLocalCodeSigningIdentity()
   console.log(`[本地签名] 使用固定身份: ${identity.name}`)
 
@@ -149,22 +138,7 @@ function main(): void {
     signBundle(helperPath, true, identity)
   }
 
-  const changedRuntimeFiles = refreshSignedRuntimeManifest(runtimeRoot)
-  console.log(
-    changedRuntimeFiles.length > 0
-      ? `[本地签名] 已刷新 Runtime Manifest: ${changedRuntimeFiles.join(', ')}`
-      : '[本地签名] Runtime Manifest 无需刷新',
-  )
-
-  validateCcbRuntimeArtifact(runtimeRoot, {
-    runtimeVersion: EXPECTED_CCB_RUNTIME_VERSION,
-    gitCommit: EXPECTED_CCB_RUNTIME_COMMIT,
-    protocolVersion: CCB_PROTOCOL_VERSION,
-    platform: process.platform,
-    arch: process.arch,
-  })
-
-  // 主 App 必须最后签，且不能使用 --deep 再次改写已写入 Manifest 的 Runtime 文件。
+  // 主 App 必须最后签。
   console.log('[本地签名] 签名主 App')
   signBundle(appPath, true, identity)
   run('/usr/bin/codesign', [
@@ -185,7 +159,7 @@ function main(): void {
   run('/usr/bin/hdiutil', [
     'create',
     '-volname',
-    `Proma ${pkg.version}`,
+    `Xcode ${pkg.version}`,
     '-srcfolder',
     appPath,
     '-ov',

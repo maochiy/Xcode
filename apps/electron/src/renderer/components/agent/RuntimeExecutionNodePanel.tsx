@@ -17,6 +17,8 @@ import {
   BasePathsProvider,
   MessageResponse,
 } from '@/components/ai-elements/message'
+import { Conversation, ConversationContent } from '@/components/ai-elements/conversation'
+import { AgentConversationScrollController, AgentConversationScrollButton } from './AgentConversationScrollController'
 import {
   agentExecutionNodeTranscriptCacheAtom,
   agentSDKMessagesCacheAtom,
@@ -24,10 +26,7 @@ import {
   agentSessionStreamingStateAtomFamily,
 } from '@/atoms/agent-atoms'
 import type { SessionExecutionNode } from '@/lib/session-execution-nodes'
-import {
-  buildAgentTurnPresentation,
-  orderAssistantMessagesForPresentation,
-} from '@/lib/agent-turn-presentation'
+import { buildCursorTurnPresentation } from '@/lib/agent-cursor-turn'
 import { upsertAgentLiveMessage } from '@/lib/agent-live-message'
 import { buildSubagentPresentation } from '@/lib/subagent-presentation'
 import {
@@ -61,7 +60,7 @@ function collectTopLevelBlocks(turn: AssistantTurn): TopLevelTurnBlocks {
     forcedActivity: boolean
   }> = []
 
-  for (const message of orderAssistantMessagesForPresentation(turn)) {
+  for (const message of turn.assistantMessages) {
     const blocks = message.message?.content
     if (!Array.isArray(blocks)) continue
     const forcedActivity = message.message?.stop_reason === 'tool_use'
@@ -131,7 +130,7 @@ export function buildRuntimeExecutionNodeDetails(
     const turn = turns[index]
     if (!turn) continue
     const { blocks, forcedActivityIndexes } = collectTopLevelBlocks(turn)
-    const presentation = buildAgentTurnPresentation({
+    const presentation = buildCursorTurnPresentation({
       id: `execution-node:${node.id}:${index}`,
       turn,
       blocks,
@@ -193,7 +192,7 @@ interface RuntimeExecutionTranscriptProps {
 
 /**
  * 子智能体详情复用主会话的 Turn 渲染器：
- * - 运行中沿用“最新活动替换旧活动”的实时规则；
+ * - 运行中按原生顺序追加思考、正文与工具；
  * - 执行结束后作为完整 Transcript 强制展开活动；
  * - 委派提示词已在上方单独展示，因此这里不重复渲染 user group。
  */
@@ -265,7 +264,7 @@ function RuntimeExecutionTranscript({
 
 /**
  * 执行节点详情采用委派任务 / 状态 / 执行过程 / 最终回复结构。
- * 执行过程与主会话共用同一套模型 Logo、活动状态和折叠规则。
+ * 执行过程与主会话共用同一套时间线、活动状态和折叠规则。
  */
 export function RuntimeExecutionNodePanel({
   cacheKey,
@@ -417,8 +416,9 @@ export function RuntimeExecutionNodePanel({
 
   return (
     <BasePathsProvider basePaths={sessionPath ? [sessionPath] : []}>
-      <div className="scrollbar-none h-full min-h-0 overflow-y-auto px-3 py-5">
-        <div className="mx-auto w-full max-w-[48rem] space-y-6">
+      <Conversation className="h-full">
+        <AgentConversationScrollController />
+        <ConversationContent className="max-w-[48rem] space-y-6 px-3 py-5 sm:px-3">
           <DetailSection title="委派的任务">
             <MessageResponse className="text-[13px] leading-5 text-foreground/85">
               {details.delegatedTask}
@@ -475,8 +475,9 @@ export function RuntimeExecutionNodePanel({
               </MessageResponse>
             </DetailSection>
           )}
-        </div>
-      </div>
+        </ConversationContent>
+        <AgentConversationScrollButton />
+      </Conversation>
     </BasePathsProvider>
   )
 }

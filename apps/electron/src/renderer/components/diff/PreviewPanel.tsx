@@ -81,6 +81,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
     <div className="ml-auto flex items-center gap-0.5 shrink-0">
       {currentFile && (
         <DefaultAppOpenButton
+          key={defaultAppTargetPath}
           filePath={defaultAppTargetPath}
           access={defaultAppAccess}
         />

@@ -18,6 +18,7 @@ import {
 import { activeViewAtom } from '@/atoms/active-view'
 import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { upsertAgentSession } from '@/lib/agent-session-list'
 import { useOpenSession } from './useOpenSession'
 
 interface CreateSessionOptions {
@@ -87,7 +88,7 @@ export function useCreateSession(): CreateSessionActions {
         options?.modelId ?? agentModelId ?? undefined,
         options?.draft === true,
       )
-      setAgentSessions((prev) => [meta, ...prev])
+      setAgentSessions((prev) => upsertAgentSession(prev, meta))
       openSession('agent', meta.id, meta.title)
       setActiveView('conversations')
       if (options?.draft) {

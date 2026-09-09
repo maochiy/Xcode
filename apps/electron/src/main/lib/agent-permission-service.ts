@@ -83,6 +83,8 @@ export interface CanUseToolOptions {
   title?: string
   displayName?: string
   description?: string
+  /** 仅宿主内置工具定义产生；外部服务和模型自报标记不得用于授权。 */
+  mcpReadOnly?: boolean
 }
 
 /** 待处理的权限请求 */

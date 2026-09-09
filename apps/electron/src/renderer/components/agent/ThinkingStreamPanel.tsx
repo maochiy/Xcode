@@ -87,7 +87,10 @@ export function ThinkingStreamPanel({
 
   return (
     <section
-      className={cn('agent-activity-fade-in space-y-1.5', className)}
+      className={cn(
+        'agent-activity-fade-in space-y-1.5',
+        className,
+      )}
       data-agent-activity="thinking"
       data-thinking-stream="true"
     >
@@ -124,8 +127,8 @@ export function ThinkingStreamPanel({
           <button
             type="button"
             className={cn(
-              'absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full',
-              'bg-background/90 px-2 py-1 text-[11px] text-muted-foreground shadow-md backdrop-blur-sm',
+              'absolute bottom-2 right-2 z-20 inline-flex items-center gap-1 rounded-full',
+              'px-2 py-1 text-[11px] text-foreground/75',
               'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45',
             )}
             onClick={scrollToLatest}

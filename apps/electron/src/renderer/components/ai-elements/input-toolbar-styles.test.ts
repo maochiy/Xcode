@@ -30,6 +30,6 @@ describe('输入框容器样式', () => {
   test('主题覆盖应定位真实输入卡片，不应依赖第一个子元素', () => {
     expect(globalsCss).not.toContain('[data-input-mode] > div:first-child')
     expect(globalsCss).toContain('.ui-classic .input-surface-card')
-    expect(globalsCss).toContain('.theme-terminal-dark .input-surface-card')
+    expect(globalsCss).not.toContain('.theme-terminal-dark')
   })
 })

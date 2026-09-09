@@ -799,7 +799,7 @@ export async function confirmImport(options: ConfirmImportOptions | ConfirmImpor
     const overwrite = conflictResolution === 'overwrite'
     let targetWorkspace: AgentWorkspace | undefined
     if (createNewWorkspace) {
-      throw new Error('新版项目必须先在 Proma 中添加本机已有目录，再选择该项目作为导入目标')
+      throw new Error('新版项目必须先在 Xcode 中添加本机已有目录，再选择该项目作为导入目标')
     } else if (targetWorkspaceId) {
       targetWorkspace = getAgentWorkspace(targetWorkspaceId)
     } else {

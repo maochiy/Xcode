@@ -30,6 +30,18 @@ type PermissionResult = {
 interface PendingAskUser {
   resolve: (result: PermissionResult) => void
   request: AskUserRequest
+  signal: AbortSignal
+  abortListener: () => void
+  onSettled?: (request: AskUserRequest, outcome: AskUserSettlement) => void
+}
+
+export type AskUserSettlement = 'answered' | 'aborted' | 'cleared'
+
+export interface AskUserLifecycleCallbacks {
+  /** 请求已经进入 pending Map 后触发。 */
+  onPending?: (request: AskUserRequest) => void
+  /** 请求从 pending Map 移除后触发。 */
+  onSettled?: (request: AskUserRequest, outcome: AskUserSettlement) => void
 }
 
 /**
@@ -52,7 +64,11 @@ export class AgentAskUserService {
     input: Record<string, unknown>,
     signal: AbortSignal,
     sendToRenderer: (request: AskUserRequest) => void,
+    lifecycle?: AskUserLifecycleCallbacks,
   ): Promise<PermissionResult> {
+    if (signal.aborted) {
+      return Promise.resolve({ behavior: 'deny', message: '操作已中止' })
+    }
     const questions = this.parseQuestions(input)
 
     const request: AskUserRequest = {
@@ -62,18 +78,52 @@ export class AgentAskUserService {
       toolInput: input,
     }
 
-    sendToRenderer(request)
-
     return new Promise<PermissionResult>((resolve) => {
-      this.pendingRequests.set(request.requestId, { resolve, request })
-
-      signal.addEventListener('abort', () => {
-        if (this.pendingRequests.has(request.requestId)) {
-          this.pendingRequests.delete(request.requestId)
-          resolve({ behavior: 'deny', message: '操作已中止' })
-        }
-      }, { once: true })
+      const abortListener = (): void => {
+        this.settleRequest(
+          request.requestId,
+          { behavior: 'deny', message: '操作已中止' },
+          'aborted',
+        )
+      }
+      this.pendingRequests.set(request.requestId, {
+        resolve,
+        request,
+        signal,
+        abortListener,
+        onSettled: lifecycle?.onSettled,
+      })
+      signal.addEventListener('abort', abortListener, { once: true })
+      try {
+        lifecycle?.onPending?.(request)
+        sendToRenderer(request)
+      } catch {
+        this.settleRequest(
+          request.requestId,
+          { behavior: 'deny', message: '无法发起用户问答' },
+          'aborted',
+        )
+      }
     })
+  }
+
+  private settleRequest(
+    requestId: string,
+    result: PermissionResult,
+    outcome: AskUserSettlement,
+  ): string | null {
+    const pending = this.pendingRequests.get(requestId)
+    if (!pending) return null
+    this.pendingRequests.delete(requestId)
+    pending.signal.removeEventListener('abort', pending.abortListener)
+    try {
+      pending.onSettled?.(pending.request, outcome)
+    } catch {
+      console.warn('[Agent 问答] 同步等待状态失败，请求仍正常结束。')
+    } finally {
+      pending.resolve(result)
+    }
+    return pending.request.sessionId
   }
 
   /**
@@ -85,20 +135,16 @@ export class AgentAskUserService {
     const pending = this.pendingRequests.get(requestId)
     if (!pending) return null
 
-    const sessionId = pending.request.sessionId
-
     // 构建 updatedInput：保留原始输入 + 注入 answers
     const updatedInput: Record<string, unknown> = {
       ...pending.request.toolInput,
       answers,
     }
 
-    pending.resolve({
+    return this.settleRequest(requestId, {
       behavior: 'allow' as const,
       updatedInput,
-    })
-    this.pendingRequests.delete(requestId)
-    return sessionId
+    }, 'answered')
   }
 
   /**
@@ -114,8 +160,11 @@ export class AgentAskUserService {
   clearSessionPending(sessionId: string): void {
     for (const [requestId, pending] of this.pendingRequests) {
       if (pending.request.sessionId === sessionId) {
-        pending.resolve({ behavior: 'deny', message: '会话已结束' })
-        this.pendingRequests.delete(requestId)
+        this.settleRequest(
+          requestId,
+          { behavior: 'deny', message: '会话已结束' },
+          'cleared',
+        )
       }
     }
   }

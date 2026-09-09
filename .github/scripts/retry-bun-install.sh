@@ -5,7 +5,7 @@ set -uo pipefail
 readonly MAX_ATTEMPTS="${BUN_INSTALL_MAX_ATTEMPTS:-10}"
 readonly NETWORK_CONCURRENCY="${BUN_INSTALL_NETWORK_CONCURRENCY:-4}"
 readonly CONCURRENT_SCRIPTS="${BUN_INSTALL_CONCURRENT_SCRIPTS:-1}"
-readonly INSTALL_ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/proma-bun-install-${GITHUB_JOB:-local}-$$"
+readonly INSTALL_ROOT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/xcode-bun-install-${GITHUB_JOB:-local}-$$"
 readonly LOCK_FILE="${PWD}/bun.lock"
 readonly ORIGINAL_LOCK_FILE="${INSTALL_ROOT}/bun.lock.original"
 
@@ -30,8 +30,7 @@ fi
 select_registry() {
   local attempt="$1"
 
-  # Proma 原 bun.lock 的 tarball URL 固定到了私有 Nexus，而 CCB Runtime
-  # 使用 npmmirror。优先使用已经被 CCB 构建验证过的 npmmirror；若失败，
+  # bun.lock 中可能仍包含历史 registry URL。优先使用 npmmirror；若失败，
   # 下一次切换到 npm 官方源，避免单个 registry/CDN 成为发布单点。
   if [ $((attempt % 2)) -eq 1 ]; then
     printf '%s' "https://registry.npmmirror.com"

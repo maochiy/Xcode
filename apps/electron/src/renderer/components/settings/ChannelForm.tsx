@@ -6,7 +6,7 @@
  * - 模型列表：已启用模型置顶 + 可用模型搜索
  * - 连接测试
  *
- * 新增和编辑统一使用显式“保存配置”，避免字段尚未编辑完成时写入 CCB。
+ * 新增和编辑统一使用显式“保存配置”，避免字段尚未编辑完成时持久化。
  */
 
 import * as React from 'react'
@@ -32,6 +32,8 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
+  DEFAULT_THINKING_EFFORT_LEVELS,
+  normalizeConfiguredThinkingEffortLevels,
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
   isAgentCompatibleProvider,
@@ -212,6 +214,7 @@ function createEmptyModelDraft(): CcbConfiguredModelEditorValue {
     id: '',
     name: '',
     description: '',
+    effortLevels: [...DEFAULT_THINKING_EFFORT_LEVELS],
   }
 }
 
@@ -386,11 +389,11 @@ export function ChannelForm({
         setRuntimeCatalogLoading(false)
       }).catch(error => {
         if (runtimeCatalogRequestIdRef.current !== requestId) return
-        console.error('[模型配置表单] CCB 模型能力解析失败:', error)
+        console.error('[模型配置表单] Pi 模型能力解析失败:', error)
         setRuntimeCatalog(null)
         setRuntimeCatalogLoading(false)
         setRuntimeCatalogError(
-          error instanceof Error ? error.message : 'CCB 模型能力解析失败',
+          error instanceof Error ? error.message : 'Pi 模型能力解析失败',
         )
       })
     }, 450)
@@ -564,9 +567,7 @@ export function ChannelForm({
       ...(newModelDraft.autoCompactRatio !== undefined
         ? { autoCompactRatio: newModelDraft.autoCompactRatio }
         : {}),
-      ...(newModelDraft.effortLevels !== undefined
-        ? { thinkingEffortLevels: [...newModelDraft.effortLevels] }
-        : {}),
+      thinkingEffortLevels: normalizeConfiguredThinkingEffortLevels(newModelDraft.effortLevels),
       enabled: true,
       source: 'manual',
     }
@@ -576,7 +577,7 @@ export function ChannelForm({
     setShowNewModelEditor(false)
   }
 
-  /** 更新模型的 CCB 配置字段。 */
+  /** 更新模型配置字段。 */
   const handleUpdateModel = (
     target: ChannelModel,
     patch: Partial<CcbConfiguredModelEditorValue>,
@@ -642,7 +643,7 @@ export function ChannelForm({
       // 凭据 JSON 已含 accountId，写入 apiKey 后由 codexCredentials 派生展示，无需单独 state。
       setApiKey(credentials)
 
-      // ChatGPT 模型目录由 CCB Runtime 使用的 OAuth 渠道提供；登录后自动拉取并全部启用。
+      // ChatGPT 模型目录由 Pi Runtime 使用的 OAuth 渠道提供；登录后自动拉取并全部启用。
       // 不复用 handleFetchModels：其 gate 读派生自 apiKey state 的 hasRequiredSecret，
       // 而 setApiKey 是异步的，同一 tick 内仍是旧值，这里直接内联拉取。
       let codexModels: ChannelModel[] = []
@@ -671,7 +672,7 @@ export function ChannelForm({
 
   /** 从供应商 API 拉取可用模型列表。 */
   const fetchAvailableModels = async (): Promise<void> => {
-    // ChatGPT 订阅由 CCB Runtime 管理请求地址；其余 Provider 仍要求 Base URL。
+    // ChatGPT 订阅由 Pi Runtime 管理请求地址；其余 Provider 仍要求 Base URL。
     if (!hasRequiredSecret || (!isCodexProvider && !baseUrl.trim())) return
 
     setFetchingModels(true)
@@ -775,7 +776,10 @@ export function ChannelForm({
         provider,
         baseUrl,
         apiKey: effectiveApiKey,
-        models,
+        models: models.map(model => ({
+          ...model,
+          thinkingEffortLevels: normalizeConfiguredThinkingEffortLevels(model.thinkingEffortLevels),
+        })),
         ...(autoCompactRatio !== undefined ? { autoCompactRatio } : {}),
         defaultModelId: defaultModelId || undefined,
         enabled,
@@ -989,11 +993,11 @@ export function ChannelForm({
       : undefined
   }, [models, newModelDraft.id])
   const runtimeCatalogStatus = runtimeCatalogLoading
-    ? 'CCB Runtime 正在解析模型能力…'
+    ? 'Pi Runtime 正在解析模型能力…'
     : runtimeCatalog
-      ? `CCB Runtime 已解析 ${runtimeCatalog.models.length} 个模型${runtimeCatalog.runtimeVersion ? ` · ${runtimeCatalog.runtimeVersion}` : ''}`
+      ? `Pi Runtime 已解析 ${runtimeCatalog.models.length} 个模型${runtimeCatalog.runtimeVersion ? ` · ${runtimeCatalog.runtimeVersion}` : ''}`
       : runtimeCatalogError
-        ? 'CCB Runtime 解析失败'
+        ? 'Pi Runtime 解析失败'
         : undefined
 
   return (
@@ -1041,7 +1045,7 @@ export function ChannelForm({
           />
           {provider === 'custom' && (
             <div className="px-4 pb-3 text-xs text-muted-foreground">
-              用于 OpenAI Chat Completions 的自定义请求地址，Chat 会按原样发送请求。Agent 使用 CCB Runtime；若服务提供 Anthropic Messages 端点，请选择「Anthropic 兼容格式」。
+              用于 OpenAI Chat Completions 的自定义请求地址，Chat 会按原样发送请求。Agent 使用 Pi Runtime；若服务提供 Anthropic Messages 端点，请选择「Anthropic 兼容格式」。
             </div>
           )}
           <SettingsInput
@@ -1051,7 +1055,7 @@ export function ChannelForm({
             placeholder="例如: My Anthropic"
             required
           />
-          {/* ChatGPT 订阅的请求地址由 CCB Runtime 管理，无需用户填写 */}
+          {/* ChatGPT 订阅的请求地址由 Pi Runtime 管理，无需用户填写 */}
           {!isCodexProvider && (
             <SettingsInput
               label={getUrlInputLabel(provider)}
@@ -1221,7 +1225,7 @@ export function ChannelForm({
           />
           <SettingsSelect
             label="默认模型"
-            description="新建会话和 CCB 默认使用的模型"
+            description="新建会话和 Pi 默认使用的模型"
             value={defaultModelId}
             onValueChange={setDefaultModelId}
             options={defaultModelOptions}
@@ -1241,7 +1245,7 @@ export function ChannelForm({
       >
         {runtimeCatalogError && (
           <div className="px-1 text-xs text-destructive">
-            模型列表仍可编辑；CCB 能力信息将在配置正确后自动恢复。
+            模型列表仍可编辑；Pi 能力信息将在配置正确后自动恢复。
           </div>
         )}
         <SettingsCard divided={false}>
@@ -1452,13 +1456,13 @@ export function ChannelForm({
             </div>
           </ScrollArea>
 
-          {/* 手动添加模型：字段与 CCB 原生模型配置保持一致。 */}
+          {/* 手动添加模型：配置由模型中心统一交给 Pi。 */}
           {showNewModelEditor && (
             <div className="space-y-4 border-t border-border/50 bg-muted/15 p-4">
               <div>
                 <p className="text-sm font-medium">添加自定义模型</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  未填写的能力由 CCB 内核根据模型 ID 自动判断。
+                  可按模型服务文档设置上下文窗口与思考等级，统一交给 Pi 执行。
                 </p>
               </div>
               <CcbConfiguredModelEditor

@@ -673,6 +673,11 @@ export function RichTextInput({
   useEffect(() => {
     if (editor && !disabled) {
       const timer = setTimeout(() => {
+        const active = document.activeElement
+        if (active instanceof HTMLElement && active.closest('[data-codex-terminal]')) {
+          // 右侧终端已经拿到焦点时，不要把输入抢回 composer。
+          return
+        }
         editor.commands.focus()
       }, 100)
       return () => clearTimeout(timer)

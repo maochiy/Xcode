@@ -1,4 +1,16 @@
-import { describe, expect, test, mock } from 'bun:test'
+import { afterAll, describe, expect, test, mock } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import * as os from 'node:os'
+import { join } from 'node:path'
+
+const originalHome = process.env.HOME
+const temporaryHome = mkdtempSync(join(os.tmpdir(), 'proma-context-packet-'))
+process.env.HOME = temporaryHome
+
+mock.module('node:os', () => ({
+  ...os,
+  homedir: () => temporaryHome,
+}))
 
 // context-packet-compiler 的传递依赖链（config-paths 等）在顶层 import
 // electron 的 BrowserWindow，bun test 环境无法加载真实 electron 模块，
@@ -25,6 +37,16 @@ import { contextPacketText } from './context-packet-text'
 // （channel-manager 的 safeStorage 等），bun test 环境无法加载真实 electron。
 // 静态 import 会被提升到 mock 之前执行，因此这里用动态 import。
 const { compileContextPacket, contextPacketFromRun } = await import('./context-packet-compiler')
+const { getWorkspaceSkillsDir } = await import('../config-paths')
+
+afterAll(() => {
+  if (originalHome === undefined) {
+    delete process.env.HOME
+  } else {
+    process.env.HOME = originalHome
+  }
+  rmSync(temporaryHome, { recursive: true, force: true })
+})
 
 function packetFixture(): ContextPacket {
   const taskGraph: RuntimeTaskGraph = {
@@ -159,6 +181,70 @@ describe('Proma Context Packet', () => {
     expect(text).toContain('computer-use：操作内置浏览器')
     expect(text).not.toContain('这里是很长的 Skill 操作说明')
     expect(text).not.toContain('实现登录页')
+  })
+
+  test('Given 工作区存在多个 Skills When 默认编译 Context Packet Then 只包含目录元数据而不注入正文', () => {
+    const workspaceSlug = 'metadata-only'
+    const skillsDir = getWorkspaceSkillsDir(workspaceSlug)
+    const alphaDir = join(skillsDir, 'alpha')
+    const betaDir = join(skillsDir, 'beta')
+    mkdirSync(alphaDir, { recursive: true })
+    mkdirSync(betaDir, { recursive: true })
+    writeFileSync(
+      join(alphaDir, 'SKILL.md'),
+      '---\nname: Alpha\ndescription: Alpha 描述\n---\nALPHA-BODY-SENTINEL',
+      'utf-8',
+    )
+    writeFileSync(
+      join(betaDir, 'SKILL.md'),
+      '---\nname: Beta\ndescription: Beta 描述\n---\nBETA-BODY-SENTINEL',
+      'utf-8',
+    )
+
+    const packet = compileContextPacket({
+      sessionId: 'session-metadata-only',
+      workspace: {
+        id: 'workspace-metadata-only',
+        name: 'Metadata Only',
+        slug: workspaceSlug,
+        path: join(temporaryHome, 'project'),
+        canonicalPath: join(temporaryHome, 'project'),
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      modelRoute: {
+        modelId: 'model-1',
+        provider: 'openai',
+        routeRevision: 'route-1',
+        runtimeId: 'pi',
+        channelId: 'channel-1',
+        baseUrl: '',
+        apiMode: 'openai_responses',
+        credentialRevision: 'r1',
+        capabilities: {},
+        source: 'legacy-compat',
+      },
+      runtimeId: 'pi',
+      strategyId: 'proma.pi.clarification.v1',
+      strategyInstruction: '普通对话',
+      recentMessageLimit: 0,
+    })
+
+    expect([...packet.skills].sort((left, right) => left.name.localeCompare(right.name))).toEqual([
+      {
+        name: 'Alpha',
+        description: 'Alpha 描述',
+        path: join(alphaDir, 'SKILL.md'),
+      },
+      {
+        name: 'Beta',
+        description: 'Beta 描述',
+        path: join(betaDir, 'SKILL.md'),
+      },
+    ])
+    expect(packet.skills.every((skill) => skill.content === undefined)).toBe(true)
+    expect(JSON.stringify(packet)).not.toContain('ALPHA-BODY-SENTINEL')
+    expect(JSON.stringify(packet)).not.toContain('BETA-BODY-SENTINEL')
   })
 
   test('Given Hermes 子任务 When 投影 Context Packet Then 只带依赖链产物且不复制整段会话历史', () => {

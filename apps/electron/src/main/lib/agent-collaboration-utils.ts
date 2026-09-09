@@ -83,6 +83,7 @@ export function buildDelegationPrompt(input: {
 
 - 只处理下面的子任务，不要扩展到父任务的其他部分。
 - 不要创建新的协作子会话。
+- 你的角色只定义职责；无论 explore/research/implement/review/custom，实际执行内核始终是 Pi，不依赖 Codex 或 Claude Code。
 - 如需修改文件，保持改动最小，并在最终回复说明文件路径和验证结果。
 - 如果信息不足，直接列出缺口，不要编造。
 

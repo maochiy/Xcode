@@ -168,8 +168,8 @@ export function createPiBridge({
     async startRun(payload) {
       return request('run.start', payload, 120000);
     },
-    async steer(sessionId, message) {
-      return request('run.steer', { sessionId, message });
+    async steer(sessionId, message, options = {}) {
+      return request('run.steer', { sessionId, message, options });
     },
     async cancel(sessionId) {
       return request('run.cancel', { sessionId });
@@ -399,10 +399,10 @@ export function createPiBridgePool({
         throw error;
       }
     },
-    async steer(sessionId, message) {
+    async steer(sessionId, message, options = {}) {
       const bridge = await bridgeForSession(sessionId);
       if (!bridge) throw new Error('Pi session binding is unavailable.');
-      return bridge.steer(sessionId, message);
+      return bridge.steer(sessionId, message, options);
     },
     async cancel(sessionId) {
       const bridge = await bridgeForSession(sessionId);

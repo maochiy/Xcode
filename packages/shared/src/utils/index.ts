@@ -37,6 +37,8 @@ export {
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
+export { normalizeConfiguredThinkingEffortLevels } from './thinking-effort'
+export { normalizeBrowserNavigationUrl } from './browser-url'
 export {
   getSDKCompactStatus,
   isPersistableSDKSystemMessage,

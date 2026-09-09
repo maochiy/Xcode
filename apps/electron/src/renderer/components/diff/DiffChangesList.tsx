@@ -217,7 +217,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
   const shouldShowWorktreeSelector = Boolean(workspaceSlug || (worktreeRepoPaths?.length ?? 0) > 0)
 
   return (
-    <div className="scrollbar-none flex h-full flex-col overflow-y-auto">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       {/* Worktree 分支选择器 — 空 diff / 非 Git 空态也保留，避免无法切到会话 worktree */}
       {shouldShowWorktreeSelector && (
         <WorktreeSelector
@@ -231,7 +231,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
 
       {/* 搜索框 — 有改动文件时才显示 */}
       {shouldShowSearch && (
-        <div className="flex-shrink-0 sticky top-0 z-10 bg-content-area px-2 pt-1.5 pb-1">
+        <div className="flex-shrink-0 bg-content-area px-2 pt-1.5 pb-1">
           <div className="flex items-center gap-1.5 px-2 h-7 rounded-md bg-muted/50 border border-transparent focus-within:border-primary/40 focus-within:bg-muted/70 transition-colors">
             <Search className="size-3 text-muted-foreground flex-shrink-0" />
             <input
@@ -277,21 +277,21 @@ export const DiffChangesList = React.memo(function DiffChangesList({
         </div>
       )}
       {isGitRepo && hasAnyChanges && !isEmpty && (
-        <>
+        <div className="hover-scrollbar-xy min-h-0 min-w-0 flex-1">
           {fileGroups.map((group) => {
             const isCollapsed = collapsedDirs.has(group.gitRoot)
             return (
-              <div key={group.gitRoot}>
+              <div key={group.gitRoot} className="w-max min-w-full">
                 {/* 文件夹 bar */}
                 <button
                   type="button"
                   onClick={() => toggleDir(group.gitRoot)}
-                  className="flex items-center gap-1 w-full px-2 py-2 text-[13px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
+                  className="flex w-max min-w-full items-center gap-1 px-2 py-2 text-[13px] font-medium text-foreground/60 hover:bg-foreground/[0.04] transition-colors"
                 >
                   <ChevronRight
                     className={cn('size-3 transition-transform', !isCollapsed && 'rotate-90')}
                   />
-                  <span className="truncate">{group.dirName}</span>
+                  <span className="whitespace-nowrap">{group.dirName}</span>
                   {/* 文件夹层级的来源 badges */}
                   {group.sources.map((src) => {
                     const cfg = SOURCE_CONFIG[src] ?? SOURCE_CONFIG.none!
@@ -329,7 +329,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
 
           {/* 未追踪文件分组 */}
           {filteredUntrackedFiles.length > 0 && (
-            <div>
+            <div className="w-max min-w-full">
               <div className="flex items-center px-2 py-2 text-[13px] font-medium text-muted-foreground border-t border-border/30">
                 未追踪文件
               </div>
@@ -342,7 +342,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   )
@@ -374,7 +374,7 @@ function FileRow({
       role="button"
       tabIndex={0}
       className={cn(
-        'flex items-center w-full px-2 pl-3 h-[36px] text-[14px] transition-colors group',
+        'flex w-max min-w-full items-center px-2 pl-3 h-[36px] text-[14px] transition-colors group',
         isSelected
           ? 'session-item-selected bg-primary/10 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
           : 'hover:bg-primary/5',
@@ -387,7 +387,7 @@ function FileRow({
       <FileTypeIcon name={fileName} isDirectory={false} size={16} />
       <Tooltip delayDuration={900}>
         <TooltipTrigger asChild>
-          <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+          <span className="ml-1.5 flex items-baseline gap-1.5 whitespace-nowrap">
             <span className="shrink-0">
               {fileName}
               {file.status === 'deleted' && (
@@ -395,7 +395,7 @@ function FileRow({
               )}
             </span>
             {dir && (
-              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+              <span className="text-[11px] text-foreground/30 whitespace-nowrap">{dir}</span>
             )}
           </span>
         </TooltipTrigger>
@@ -448,16 +448,16 @@ function UntrackedFileRow({
     <div
       role="button"
       tabIndex={0}
-      className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
+      className="flex w-max min-w-full items-center px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
     >
       <FileTypeIcon name={fileName} isDirectory={false} size={16} />
       <Tooltip delayDuration={900}>
         <TooltipTrigger asChild>
-          <span className="ml-1.5 truncate flex items-baseline gap-1.5 min-w-0">
+          <span className="ml-1.5 flex items-baseline gap-1.5 whitespace-nowrap">
             <span className="shrink-0">{fileName}</span>
             {dir && (
-              <span className="text-[11px] text-foreground/30 truncate">{dir}</span>
+              <span className="text-[11px] text-foreground/30 whitespace-nowrap">{dir}</span>
             )}
           </span>
         </TooltipTrigger>

@@ -60,20 +60,27 @@ describe('Proma Dispatch Policy', () => {
       message: '按计划实施',
       ...sanitized,
     })
-    expect(decision.runtimeId).toBe('hermes')
-    expect(decision.runtimeId).not.toBe('claude')
+    expect(decision.runtimeId).toBe('pi')
   })
 
-  test('Given 兼容入口确认内部实施任务 Then 只调度 Claude Code', () => {
+  test('Given 兼容入口确认内部实施任务 Then 保留实施角色但只调度 Pi', () => {
     const decision = dispatchForRequest({ internalWorkflowStage: 'implementation', message: '按计划实施' })
-    expect(decision.runtimeId).toBe('claude')
-    expect(builtInSystemPrompt('claude', decision.intent)).toContain('批准的计划')
+    expect(decision.runtimeId).toBe('pi')
+    expect(builtInSystemPrompt('pi', decision.intent)).toContain('用户批准')
   })
 
-  test('Given 兼容入口的内部任务类型 Then 按 Runtime 职责路由', () => {
-    expect(dispatchForRequest({ internalWorkflowStage: 'coordination' }).runtimeId).toBe('hermes')
-    expect(dispatchForRequest({ internalWorkflowStage: 'planning' }).runtimeId).toBe('codex')
-    expect(dispatchForRequest({ internalWorkflowStage: 'review' }).runtimeId).toBe('codex')
+  test('Given 兼容入口的内部任务类型 Then 各职责统一由 Pi 执行', () => {
+    expect(dispatchForRequest({ internalWorkflowStage: 'coordination' }).runtimeId).toBe('pi')
+    expect(dispatchForRequest({ internalWorkflowStage: 'planning' }).runtimeId).toBe('pi')
+    expect(dispatchForRequest({ internalWorkflowStage: 'review' }).runtimeId).toBe('pi')
     expect(dispatchForRequest({ internalWorkflowStage: 'final_summary' }).runtimeId).toBe('pi')
+  })
+
+  test('Given 内部子运行仍携带旧 forcedRuntimeId When 调度 Then 不重新启用旧内核', () => {
+    const decision = dispatchForRequest({
+      internalSubRun: true,
+      forcedRuntimeId: 'claude',
+    })
+    expect(decision.runtimeId).toBe('pi')
   })
 })

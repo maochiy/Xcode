@@ -45,8 +45,16 @@ export type ThinkingConfig =
   | { type: 'enabled'; budgetTokens: number }
   | { type: 'disabled' }
 
-/** CCB 支持的离散思考强度。 */
+/** Proma 支持的离散思考强度。 */
 export type ThinkingEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** 配置和滑杆统一使用四档；旧 max 值仅用于历史数据兼容。 */
+export const DEFAULT_THINKING_EFFORT_LEVELS: readonly ThinkingEffortLevel[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]
 
 /** CCB 原生全局模型配置支持的 Provider 类型。 */
 export type CcbNativeModelType = 'anthropic' | 'openai' | 'gemini' | 'grok'
@@ -406,6 +414,8 @@ export type SDKUserContentBlock =
 /** SDK assistant 消息 */
 export interface SDKAssistantMessage {
   type: 'assistant'
+  /** Pi 原生流事件报告的当前阶段，不根据正文是否结束推测下一阶段。 */
+  _promaActivityPhase?: 'waiting' | 'thinking' | 'text' | 'tool' | 'idle'
   message: {
     content: SDKContentBlock[]
     usage?: {
@@ -485,7 +495,7 @@ export interface SDKSystemMessage {
   tool_use_id?: string
   status?: string
   /** SDK status: 上下文压缩结果 */
-  compact_result?: 'success' | 'failed' | 'noop'
+  compact_result?: 'success' | 'failed' | 'noop' | 'stopped'
   /** SDK status: 上下文压缩失败原因 */
   compact_error?: string
   /** CCB 压缩后的上下文 token 估算值 */
@@ -769,7 +779,7 @@ export type AgentEvent =
   | { type: 'compacting'; trigger?: 'manual' | 'auto' }
   | {
     type: 'compact_complete'
-    status: 'success' | 'noop' | 'failed'
+    status: 'success' | 'noop' | 'failed' | 'stopped'
     trigger?: 'manual' | 'auto'
     summary?: string
     message?: string
@@ -1279,6 +1289,8 @@ export interface AgentSendInput {
   sessionId: string
   /** 用户消息内容 */
   userMessage: string
+  /** Renderer 为本条用户消息生成的稳定 UUID，用于与 Runtime 原生回传去重。 */
+  userMessageUuid?: string
   /** 渠道 ID；CCB_NATIVE_CHANNEL_ID 表示完全使用 CCB 原生配置。 */
   channelId: string
   /** 模型 ID */

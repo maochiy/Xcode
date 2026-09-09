@@ -512,7 +512,29 @@ describe('SessionFloatingPanel 会话悬浮面板', () => {
     expect(html).not.toContain('animate-spin')
   })
 
-  test('Given 浏览器任务已暂停或失败 When 渲染悬浮面板 Then 不显示（只有 running 显示）', () => {
+  test('Given 浏览器任务明确等待用户 When 渲染悬浮面板 Then 保留可操作入口但不执行流光', () => {
+    const html = renderFloatingPanel(false, [], {
+      nodes: [],
+      todos: [],
+      updatedAt: 1,
+    }, [{
+      taskId: 'waiting-browser-task',
+      sessionId: SESSION_ID,
+      title: '请完成网页登录',
+      url: 'https://example.com/login',
+      status: 'waiting_user',
+      createdAt: 100,
+      updatedAt: 100,
+    }])
+
+    expect(html).toContain('data-session-floating-browser-region')
+    expect(html).toContain('data-browser-task-entry=\"waiting-browser-task\"')
+    expect(html).toContain('请完成网页登录')
+    expect(html).toContain('等待操作')
+    expect(html).not.toContain('agent-status-shimmer')
+  })
+
+  test('Given 浏览器任务已暂停或失败 When 渲染悬浮面板 Then 不显示（只显示运行或等待用户）', () => {
     const html = renderFloatingPanel(false, [], {
       nodes: [],
       todos: [],

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Check } from 'lucide-react'
+import { DEFAULT_THINKING_EFFORT_LEVELS, normalizeConfiguredThinkingEffortLevels } from '@proma/shared'
 import type {
   AgentRuntimeModelInfo,
   ThinkingEffortLevel,
@@ -7,6 +7,7 @@ import type {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { THINKING_EFFORT_LABELS } from '@/lib/agent-thinking-effort'
 
 export interface CcbConfiguredModelEditorValue {
   id: string
@@ -24,17 +25,6 @@ interface CcbConfiguredModelEditorProps {
   runtimeModel?: AgentRuntimeModelInfo
   idError?: string
 }
-
-const EFFORT_LEVELS: Array<{
-  value: ThinkingEffortLevel
-  label: string
-}> = [
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' },
-  { value: 'max', label: '最大' },
-]
 
 export function CcbConfiguredModelEditor({
   value,
@@ -73,7 +63,7 @@ export function CcbConfiguredModelEditor({
         </ModelField>
         <ModelField
           label="Context Window"
-          description="Token 数，留空由 CCB 判断"
+          description="Token 数，留空使用内核默认值"
         >
           <Input
             type="number"
@@ -86,7 +76,7 @@ export function CcbConfiguredModelEditor({
             }}
             placeholder={
               runtimeModel?.contextWindow
-                ? `CCB 自动：${runtimeModel.contextWindow.toLocaleString()}`
+                ? `默认：${runtimeModel.contextWindow.toLocaleString()}`
                 : '例如 200000'
             }
           />
@@ -162,56 +152,40 @@ function ModelField({
 
 interface EffortLevelEditorProps {
   value?: ThinkingEffortLevel[]
-  onChange: (value: ThinkingEffortLevel[] | undefined) => void
+  onChange: (value: ThinkingEffortLevel[]) => void
 }
 
 function EffortLevelEditor({
   value,
   onChange,
 }: EffortLevelEditorProps): React.ReactElement {
-  const automatic = value === undefined
+  const selectedLevels = normalizeConfiguredThinkingEffortLevels(value)
 
   const toggleLevel = (level: ThinkingEffortLevel): void => {
-    const current = value ?? []
     onChange(
-      current.includes(level)
-        ? current.filter(item => item !== level)
-        : [...current, level],
+      selectedLevels.includes(level)
+        ? selectedLevels.filter(item => item !== level)
+        : [...selectedLevels, level],
     )
   }
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-xs font-medium">思考等级</p>
-          <p className="text-[11px] text-muted-foreground">
-            自动判断表示不写 effortLevels；全部取消表示该模型不支持 Effort
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => onChange(automatic ? [] : undefined)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors',
-            automatic
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {automatic && <Check size={12} />}
-          由 CCB 自动判断
-        </button>
+      <div>
+        <p className="text-xs font-medium">思考等级</p>
+        <p className="text-[11px] text-muted-foreground">
+          默认勾选全部思考等级，可按需取消；全部取消表示该模型不支持思考等级
+        </p>
       </div>
-      <div className={cn('flex flex-wrap gap-2', automatic && 'opacity-45')}>
-        {EFFORT_LEVELS.map(option => {
-          const selected = value?.includes(option.value) ?? false
+      <div className="flex flex-wrap gap-2">
+        {DEFAULT_THINKING_EFFORT_LEVELS.map(level => {
+          const selected = selectedLevels.includes(level)
           return (
             <button
-              key={option.value}
+              key={level}
               type="button"
-              disabled={automatic}
-              onClick={() => toggleLevel(option.value)}
+              aria-pressed={selected}
+              onClick={() => toggleLevel(level)}
               className={cn(
                 'rounded-full px-3 py-1.5 text-xs transition-colors',
                 selected
@@ -219,7 +193,7 @@ function EffortLevelEditor({
                   : 'bg-muted/65 text-muted-foreground hover:text-foreground',
               )}
             >
-              {option.label}
+              {THINKING_EFFORT_LABELS[level]}
             </button>
           )
         })}

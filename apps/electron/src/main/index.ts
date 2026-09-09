@@ -1,12 +1,11 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell, ipcMain } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { APP_DISPLAY_NAME, configureAppBranding } from './lib/app-branding'
 
-// Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
-// 必须在任何会读取 userData 路径的模块加载之前执行
-if (!app.isPackaged) {
-  app.setPath('userData', join(app.getPath('appData'), '@proma/electron-dev'))
-}
+// 先固定改名前的 userData 与 safeStorage 身份，ready 后再更新系统显示名称。
+// 必须在任何会读取 userData 路径的模块加载之前执行。
+configureAppBranding(app)
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
 //
@@ -17,7 +16,7 @@ if (!app.isPackaged) {
 // second-instance 事件，由主实例负责显示窗口。
 if (!app.requestSingleInstanceLock()) {
   console.warn(
-    '[启动] 已有 Proma 进程持有单实例锁，本次启动将退出。\n' +
+    '[启动] 已有 Xcode 进程持有单实例锁，本次启动将退出。\n' +
       '  如果窗口未出现，可能旧进程已卡死。请运行 `killall Proma` 后重试。',
   )
   app.quit()
@@ -343,6 +342,7 @@ function createWindow(): void {
 
   mainWindow = new BrowserWindow({
     ...initialBounds,
+    title: APP_DISPLAY_NAME,
     minWidth: 800,
     minHeight: 600,
     icon: iconExists ? iconPath : undefined,
@@ -621,11 +621,11 @@ function handleBootstrapFailure(err: unknown): void {
   try {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err)
     dialog.showErrorBox(
-      'Proma 启动遇到错误',
+      'Xcode 启动遇到错误',
       `部分功能可能不可用：\n\n${message}\n\n` +
         `日志位置：${app.getPath('logs')}\n\n` +
         `常见原因与排查：\n` +
-        `1. 旧版 Proma 进程未退出（终端运行 killall Proma 后重试）\n` +
+        `1. 旧版 Xcode 进程未退出（终端运行 killall Proma 后重试）\n` +
         `2. ~/.proma/ 配置损坏（重命名 ~/.proma 后重启）\n` +
         `3. 系统 Keychain 无法解密保存的凭证（删除 ~/.proma/feishu.json 等后重新登录）\n\n` +
         `如需协助请到 GitHub Issues 反馈。`,

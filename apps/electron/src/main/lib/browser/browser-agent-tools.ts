@@ -49,6 +49,20 @@ export function createBrowserScreenshotResult(dataUrl: string): CallToolResult {
   }
 }
 
+function rejectUnownedBrowserTask(
+  sessionId: string,
+  taskId: string,
+  allowCreate: boolean,
+): CallToolResult | undefined {
+  const owned = listBrowserAgentTasks(sessionId).some((task) => task.taskId === taskId)
+  if (owned) return undefined
+
+  const existsInAnotherSession = listBrowserAgentTasks().some((task) => task.taskId === taskId)
+  if (allowCreate && !existsInAnotherSession) return undefined
+
+  return browserErrorResult(`浏览器任务不属于当前会话: ${taskId}`)
+}
+
 export async function injectBrowserAgentMcpServer(
   sdk: BuiltinMcpToolFactory,
   mcpServers: Record<string, Record<string, unknown>>,
@@ -66,6 +80,8 @@ export async function injectBrowserAgentMcpServer(
         '在内置浏览器中打开指定 URL，开始或恢复一个浏览器任务。新一轮继续同一网页目标时必须复用 browser_list_tasks 返回的 taskId；title 作为悬浮面板与 Tab 名称。',
         { taskId: nonBlank.describe('浏览器任务 ID，后续 click/type/scroll 等操作复用'), title: nonBlank.describe('任务名称，作为悬浮面板条目与 Tab 名'), url: nonBlank.describe('要打开的 http/https 地址') },
         async ({ taskId, title, url }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, true)
+          if (rejected) return rejected
           const task = upsertOrReuseBrowserAgentTask({
             taskId,
             sessionId: ctx.sessionId,
@@ -90,6 +106,8 @@ export async function injectBrowserAgentMcpServer(
           selector: z.string().trim().optional().describe('兼容旧调用的 CSS 选择器，不建议使用'),
         },
         async ({ taskId, ref, selector }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, false)
+          if (rejected) return rejected
           const result = await browserAgentClick(taskId, { ref, selector })
           const target = ref || selector || '未知元素'
           return result.ok ? textResult(`已点击：${target}`) : browserErrorResult(`点击失败：${result.error ?? '未知错误'}`)
@@ -105,6 +123,8 @@ export async function injectBrowserAgentMcpServer(
           text: z.string().describe('要填入的文本'),
         },
         async ({ taskId, ref, selector, text }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, false)
+          if (rejected) return rejected
           const result = await browserAgentType(taskId, { ref, selector }, text)
           const target = ref || selector || '未知元素'
           return result.ok ? textResult(`已输入到：${target}`) : browserErrorResult(`输入失败：${result.error ?? '未知错误'}`)
@@ -115,6 +135,8 @@ export async function injectBrowserAgentMcpServer(
         '滚动内置浏览器当前页面。',
         { taskId: nonBlank, direction: z.enum(['up', 'down']), amount: z.number().optional() },
         async ({ taskId, direction, amount }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, false)
+          if (rejected) return rejected
           const result = await browserAgentScroll(taskId, direction, amount)
           return result.ok ? textResult(`已滚动：${direction}`) : browserErrorResult(`滚动失败：${result.error ?? '未知错误'}`)
         },
@@ -124,28 +146,35 @@ export async function injectBrowserAgentMcpServer(
         '对内置浏览器当前页面截图，并把图片直接返回给模型查看。',
         { taskId: nonBlank },
         async ({ taskId }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, false)
+          if (rejected) return rejected
           const result = await browserAgentScreenshot(taskId)
           if (!result.ok) return browserErrorResult(`截图失败：${result.error ?? '未知错误'}`)
           const dataUrl = (result.data as { dataUrl?: string } | undefined)?.dataUrl ?? ''
           return createBrowserScreenshotResult(dataUrl)
         },
+        { annotations: { readOnlyHint: true } },
       ),
       sdk.tool(
         'browser_get_state',
         '直接读取 Proma 内置浏览器当前页面，包括主文档、跨域 iframe、正文和可交互元素。返回的 elements.ref 可直接用于 browser_click/browser_type。',
         { taskId: nonBlank },
         async ({ taskId }) => {
+          const rejected = rejectUnownedBrowserTask(ctx.sessionId, taskId, false)
+          if (rejected) return rejected
           const result = await browserAgentGetState(taskId)
           return result.ok
             ? textResult(JSON.stringify(result.data, null, 2))
             : browserErrorResult(`获取页面状态失败：${result.error ?? '未知错误'}`)
         },
+        { annotations: { readOnlyHint: true } },
       ),
       sdk.tool(
         'browser_list_tasks',
         '列出当前会话的浏览器任务。',
         {},
         async () => textResult(JSON.stringify(listBrowserAgentTasks(ctx.sessionId), null, 2)),
+        { annotations: { readOnlyHint: true } },
       ),
     ],
   })

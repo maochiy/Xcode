@@ -410,6 +410,7 @@ export function createAgentSession(
     titleSource: title ? 'user' : 'generated',
     channelId,
     modelId,
+    runtimeId: 'pi',
     workspaceId,
     ...(taskboardTaskId ? { taskboardTaskId } : {}),
     createdAt: now,
@@ -511,6 +512,16 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
  * 避免迁移旧数据时把无法判断先后的消息错误挪动。
  */
 export function orderSDKMessagesByCreatedAt(messages: SDKMessage[]): SDKMessage[] {
+  // 升级后的 Pi 消息按原生生命周期追加。时间戳只用于展示，不是排序键；
+  // 即使系统时间回拨，也不能把新的消息移到另一个用户回合中。
+  const nativeStart = messages.findIndex((message) =>
+    (message as Record<string, unknown>)._promaNativeMessage === true)
+  if (nativeStart >= 0) {
+    return [
+      ...orderSDKMessagesByCreatedAt(messages.slice(0, nativeStart)),
+      ...messages.slice(nativeStart),
+    ]
+  }
   const timestamped = messages
     .filter((message) => typeof (message as Record<string, unknown>)._createdAt === 'number')
 
@@ -633,8 +644,21 @@ export function collapseDuplicateAssistantMessageGroups(
   // 顶层用户原文：用于折叠 429 重试导入的重复用户气泡
   const seenTopLevelUserTexts = new Set<string>()
   const collapsed: SDKMessage[] = []
+  const nativeMessageSlots = new Map<string, number>()
 
   for (const message of messages) {
+    const record = message as Record<string, unknown>
+    if (record._promaNativeMessage === true) {
+      // 原生身份相同才更新快照；相同文案、时间或工具参数不是重复依据。
+      const uuid = typeof record.uuid === 'string' ? record.uuid : undefined
+      const slot = uuid ? nativeMessageSlots.get(uuid) : undefined
+      if (slot !== undefined) collapsed[slot] = message
+      else {
+        if (uuid) nativeMessageSlots.set(uuid, collapsed.length)
+        collapsed.push(message)
+      }
+      continue
+    }
     // 丢弃 CCB 中断合成 user，避免显示为用户气泡 / 二次停止状态
     if (isCcbInterruptUserMessage(message)) {
       continue

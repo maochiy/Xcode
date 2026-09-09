@@ -1,5 +1,7 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { app, session } = require('electron');
+const { repairBrowserDirectoryRedirectHeaders } = require('./browser-navigation-policy.cjs');
 
 /**
  * 内置浏览器 Electron session partition 前缀。
@@ -40,7 +42,14 @@ function isAllowedInitialUrl(value) {
 }
 
 function browserPreloadPath() {
-  return path.join(process.resourcesPath, 'browser', 'browser-preload.cjs');
+  const packaged = path.join(process.resourcesPath, 'browser', 'browser-preload.cjs');
+  if (app?.isPackaged) return packaged;
+  const unpackaged = [
+    path.join(__dirname, 'resources/browser/browser-preload.cjs'),
+    path.join(__dirname, '../resources/browser/browser-preload.cjs'),
+    path.join(__dirname, '../../../resources/browser/browser-preload.cjs'),
+  ];
+  return unpackaged.find((candidate) => fs.existsSync(candidate)) || unpackaged[0];
 }
 
 function hardenBrowserWebPreferences(webPreferences, params) {
@@ -73,6 +82,11 @@ function notifyHost(getWindow, error) {
 function configureBrowserSession(partition, getWindow) {
   const browserSession = session.fromPartition(partition, { cache: true });
   if (configuredSessions.has(browserSession)) return browserSession;
+  // 目录兼容以实际重定向为依据，不提前篡改荣耀等站点的无斜杠路由。
+  browserSession.webRequest.onHeadersReceived(
+    { urls: ['http://*/*', 'https://*/*'] },
+    repairBrowserDirectoryRedirectHeaders,
+  );
   browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   browserSession.on('will-download', (event) => {
     event.preventDefault();

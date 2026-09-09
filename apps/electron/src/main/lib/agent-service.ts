@@ -36,7 +36,6 @@ import type {
   AgentTurnChangeStats,
 } from '@proma/shared'
 import { RuntimeAdapterRouter } from './runtime/runtime-adapters'
-import { ccbDesktopRuntimeClient } from './ccb-runtime/runtime-client'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionAttachmentsDir, getWorkspaceFilesDir } from './config-paths'
@@ -48,6 +47,7 @@ import {
   clearAgentTurnChangeTracking,
   getAgentTurnChangeStats as readAgentTurnChangeStats,
 } from './agent-turn-change-tracker'
+import { AgentStreamTargetRegistry } from './agent-stream-target-registry'
 
 // ===== 实例创建 =====
 
@@ -69,7 +69,7 @@ import('./agent-collaboration-tools').then(({ registerCollaborationEventBus }) =
  * EventBus IPC 转发中间件通过此映射找到目标 webContents。
  * runAgent 开始时注册，结束时清理。
  */
-const sessionWebContents = new Map<string, WebContents>()
+const sessionWebContents = new AgentStreamTargetRegistry<WebContents>()
 
 /**
  * 已挂载 destroyed 回收钩子的 webContents 集合。
@@ -85,18 +85,17 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * 仅依赖 finally 块清理无法覆盖窗口关闭、渲染进程崩溃、headless 路径主窗口被替换等
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
-function registerWebContents(sessionId: string, wc: WebContents): void {
+function registerWebContents(sessionId: string, wc: WebContents): number {
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
-  // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
-  sessionWebContents.set(sessionId, wc)
-  if (wcWithCleanupHook.has(wc)) return
+  // 触发时会清理所有指向旧 wc 的条目（见下方实现）。
+  const registrationId = sessionWebContents.register(sessionId, wc)
+  if (wcWithCleanupHook.has(wc)) return registrationId
   wcWithCleanupHook.add(wc)
   wc.once('destroyed', () => {
-    // 单个 wc 可能映射到多个 sessionId（同窗口多 tab），需要清理所有指向它的条目
-    for (const [sid, mappedWc] of sessionWebContents) {
-      if (mappedWc === wc) sessionWebContents.delete(sid)
-    }
+    // 单个 wc 可能映射到多个 sessionId（同窗口多 tab），需要清理全部关联项。
+    sessionWebContents.deleteTarget(wc)
   })
+  return registrationId
 }
 
 function isMainRendererWindow(win: BrowserWindow): boolean {
@@ -140,7 +139,7 @@ export async function runAgent(
   webContents: WebContents,
 ): Promise<void> {
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
-  registerWebContents(input.sessionId, webContents)
+  const registrationId = registerWebContents(input.sessionId, webContents)
   // 开始新一轮执行时清除"完成未确认"标记
   try {
     updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
@@ -194,7 +193,8 @@ export async function runAgent(
           sendAgentStreamComplete(webContents, input, {
             messages,
             stoppedByUser: opts?.stoppedByUser ?? false,
-            startedAt: opts?.startedAt,
+            // 兼容旧完成回调未携带 startedAt 的路径，保证渲染层能收敛当前运行态。
+            startedAt: opts?.startedAt ?? input.startedAt,
             lastStopDurationMs: opts?.lastStopDurationMs,
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
@@ -230,9 +230,10 @@ export async function runAgent(
     }
   } finally {
     // 仅在 orchestrator 已完成此会话时清理映射
-    // 避免被拒绝的请求误删仍在运行的会话映射
+    // 且只清理本次注册。立即发送时新回合可能已覆盖同一 session 的目标，
+    // 旧回合 finally 不能把新回合的流式 thinking / 工具 / 正文通道删除。
     if (!orchestrator.isActive(input.sessionId)) {
-      sessionWebContents.delete(input.sessionId)
+      sessionWebContents.deleteIfCurrent(input.sessionId, registrationId)
     }
   }
 }
@@ -256,8 +257,9 @@ export async function runAgentHeadless(
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
+  let registrationId: number | undefined
   if (wc) {
-    registerWebContents(runInput.sessionId, wc)
+    registrationId = registerWebContents(runInput.sessionId, wc)
   }
 
   try {
@@ -279,7 +281,8 @@ export async function runAgentHeadless(
           sendAgentStreamComplete(wc, runInput, {
             messages,
             stoppedByUser: opts?.stoppedByUser ?? false,
-            startedAt: opts?.startedAt,
+            // 兼容旧完成回调未携带 startedAt 的路径，保证渲染层能收敛当前运行态。
+            startedAt: opts?.startedAt ?? startedAt,
             lastStopDurationMs: opts?.lastStopDurationMs,
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
@@ -331,8 +334,11 @@ export async function runAgentHeadless(
       })
     }
   } finally {
-    if (!orchestrator.isActive(runInput.sessionId)) {
-      sessionWebContents.delete(runInput.sessionId)
+    if (
+      registrationId != null
+      && !orchestrator.isActive(runInput.sessionId)
+    ) {
+      sessionWebContents.deleteIfCurrent(runInput.sessionId, registrationId)
     }
   }
 }
@@ -376,7 +382,7 @@ export async function rewindAgentSession(
   return orchestrator.rewindSession(sessionId, assistantMessageUuid)
 }
 
-/** 使用 CCB Runtime 原生 transcript 分叉并创建 Proma 会话投影。 */
+/** 使用当前 Pi Runtime 的会话能力分叉并创建 Proma 会话投影。 */
 export async function forkAgentRuntimeSession(
   input: ForkSessionInput,
 ): Promise<AgentSessionMeta> {
@@ -395,21 +401,12 @@ export function stopAllAgents(): void {
   orchestrator.stopAll()
 }
 
-/**
- * 退出前关闭 CCB Desktop Runtime Host 及其 Session Worker 进程树。
- */
+/** 退出前释放当前 Pi Runtime Adapter 资源。 */
 export async function shutdownAgentRuntime(): Promise<void> {
-  await Promise.all([
-    Promise.resolve(adapter.dispose()),
-    ccbDesktopRuntimeClient.shutdown(),
-  ])
+  await Promise.resolve(adapter.dispose())
 }
 
-/**
- * 运行中动态切换会话的权限模式
- *
- * 同时更新 Proma 侧权限状态和 CCB Session Worker 的权限模式。
- */
+/** 运行中动态切换 Pi 会话的权限模式。 */
 export async function updateAgentPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
   await orchestrator.updateSessionPermissionMode(sessionId, mode)
 }
@@ -419,7 +416,7 @@ export function clearAgentPlanReady(sessionId: string): void {
   orchestrator.clearPlanReady(sessionId)
 }
 
-/** 实时更新已打开的 CCB Session；未打开时返回 false，由下次 turn 使用持久化设置。 */
+/** 实时更新已打开的 Pi Session；未打开时返回 false，由下次 turn 使用持久化设置。 */
 export async function updateAgentRuntimeConfig(
   sessionId: string,
   updates: {
@@ -431,12 +428,7 @@ export async function updateAgentRuntimeConfig(
   return adapter.updateRuntimeConfig(sessionId, updates)
 }
 
-/**
- * 模型配置变更后刷新关联的 CCB Session Worker。
- *
- * 空闲会话立即释放旧 Worker；运行中会话在当前 Turn 完成后释放，
- * 因此不会中断正在进行的工具调用。
- */
+/** 模型配置变更后刷新关联的 Pi Session。 */
 export async function invalidateAgentRuntimeConfiguration(
   channelId: string,
 ): Promise<void> {
@@ -485,7 +477,7 @@ export async function queueAgentMessage(
 /**
  * 保存文件到 Proma 私有的 Agent session 附件目录
  *
- * 文件通过绝对路径注入 Prompt，CCB cwd 仍保持为用户选择的真实项目目录。
+ * 文件通过绝对路径注入 Prompt，Pi cwd 仍保持为用户选择的真实项目目录。
  */
 export function saveFilesToAgentSession(input: AgentSaveFilesInput): AgentSavedFile[] {
   const sessionDir = getAgentSessionAttachmentsDir(input.sessionId)

@@ -60,7 +60,7 @@ export function shouldSuppressAgentStreamError(
 interface AgentRunningIndicatorState {
   isCompacting?: boolean
   contextCompaction?: {
-    status: 'running' | 'success' | 'noop' | 'failed'
+    status: 'running' | 'success' | 'noop' | 'failed' | 'stopped'
   }
 }
 

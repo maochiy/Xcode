@@ -101,6 +101,7 @@ export function PreviewTabContent({ sessionId }: PreviewTabContentProps): React.
   const toolbarActions = (
     <>
       <DefaultAppOpenButton
+        key={defaultAppTargetPath}
         filePath={defaultAppTargetPath}
         access={defaultAppAccess}
       />

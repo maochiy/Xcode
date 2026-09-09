@@ -34,6 +34,7 @@ import {
   isCodexCredentialExpired,
 } from '@proma/shared'
 import { applyExclusiveChannelSelection } from './channel-exclusive-selection'
+import { migrateChannelThinkingEffort, normalizeChannelModelThinkingEffort } from './channel-thinking-effort-migration'
 import { refreshCodexOAuth } from './codex-oauth-service'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
 import { getFetchFn } from './proxy-fetch'
@@ -198,9 +199,12 @@ function inferProviderFromBaseUrl(provider: ProviderType, baseUrl: string): Prov
  * @returns 迁移后的配置；`changed` 标记是否发生实际变更（决定是否需要回写文件）
  */
 function migrateConfig(config: ChannelsConfig): { config: ChannelsConfig; changed: boolean } {
+  const normalizedConfig = migrateChannelThinkingEffort(config)
+  const thinkingEffortChanged = normalizedConfig !== config
+  config = normalizedConfig
   const version = config.version ?? 1
   if (version >= CONFIG_VERSION) {
-    return { config, changed: false }
+    return { config, changed: thinkingEffortChanged }
   }
 
   let mutated = false
@@ -244,7 +248,7 @@ function migrateConfig(config: ChannelsConfig): { config: ChannelsConfig; change
 
   return {
     config: { version: CONFIG_VERSION, channels },
-    changed: mutated || version !== CONFIG_VERSION,
+    changed: thinkingEffortChanged || mutated || version !== CONFIG_VERSION,
   }
 }
 
@@ -376,7 +380,7 @@ export function createChannel(input: ChannelCreateInput): Channel {
     provider: input.provider,
     baseUrl: input.baseUrl,
     apiKey: encryptApiKey(input.apiKey),
-    models: input.models,
+    models: input.models.map(normalizeChannelModelThinkingEffort),
     ...(input.autoCompactRatio != null ? { autoCompactRatio: input.autoCompactRatio } : {}),
     defaultModelId: resolveDefaultModelId(
       input.models,
@@ -410,7 +414,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
   }
 
   const existing = config.channels[index]!
-  const models = input.models ?? existing.models
+  const models = (input.models ?? existing.models).map(normalizeChannelModelThinkingEffort)
 
   const updated: Channel = {
     ...existing,
@@ -660,7 +664,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'google':
         return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
       default:
-        return { success: false, message: `不支持的供应商: ${provider}。你可能过去使用的是 Proma 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
+        return { success: false, message: `不支持的供应商: ${provider}。你可能过去使用的是 Xcode 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
     }
   } catch (error) {
     return normalizeRequestError(error)

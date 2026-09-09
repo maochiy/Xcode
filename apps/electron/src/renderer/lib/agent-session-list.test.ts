@@ -31,6 +31,16 @@ describe('sortAgentSessionsByUpdatedAtDesc', () => {
     ])
     expect(result.map((s) => s.id)).toEqual(['b', 'c', 'a'])
   })
+
+  test('Given 会话缺少内核或仍绑定 legacy Runtime When 进入 Renderer 列表 Then 全部默认使用 Pi', () => {
+    const result = sortAgentSessionsByUpdatedAtDesc([
+      makeSession('legacy', 1, { runtimeId: 'claude' }),
+      makeSession('unset', 2),
+      makeSession('current', 3, { runtimeId: 'pi' }),
+    ])
+
+    expect(result.every((session) => session.runtimeId === 'pi')).toBe(true)
+  })
 })
 
 describe('replaceAgentSessionInFreshnessOrder', () => {

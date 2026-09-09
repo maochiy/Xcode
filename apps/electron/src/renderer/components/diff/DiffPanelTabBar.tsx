@@ -197,6 +197,7 @@ export function DiffPanelTabBar({
             align="start"
             sideOffset={4}
             className="w-40 p-1"
+            data-side-panel-add-menu
             onCloseAutoFocus={(event) => {
               if (!preventAddMenuFocusRestoreRef.current) return
               // 只有新建终端时才由 xterm 接管焦点；其它菜单操作保留 Radix 默认行为。

@@ -244,9 +244,9 @@ export function MainArea(): React.ReactElement {
                   <AutomationFormView />
                 ) : tabs.length === 0 ? (
                   <WelcomeView />
-                ) : deferredActiveTabId ? (
+                ) : activeTabId ? (
                   <div className="flex-1 min-h-0 titlebar-no-drag">
-                    <TabContent tabId={deferredActiveTabId} />
+                    <TabContent tabId={activeTabId} />
                   </div>
                 ) : null}
               </>

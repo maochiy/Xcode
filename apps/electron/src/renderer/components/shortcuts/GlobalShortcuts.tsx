@@ -49,6 +49,7 @@ import {
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
 import { getFileParentPath } from '@/lib/file-utils'
+import { upsertAgentSession } from '@/lib/agent-session-list'
 
 /**
  * 快捷键初始化 + 全局 Handler 注册
@@ -214,7 +215,7 @@ export function GlobalShortcuts(): null {
             modelId,
           )
           // 更新 atom 状态
-          store.set(agentSessionsAtom, (prev) => [meta, ...prev])
+          store.set(agentSessionsAtom, (prev) => upsertAgentSession(prev, meta))
           store.set(currentAgentSessionIdAtom, meta.id)
 
           // 处理附件：保存到 session 目录，构建 file references

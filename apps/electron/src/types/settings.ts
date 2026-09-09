@@ -11,6 +11,7 @@ import type {
   FeishuSessionMirrorSettings,
   WindowsShellPreference,
 } from '@proma/shared'
+import type { ThemeMode, ThemeStyle } from './theme'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode'
@@ -156,30 +157,6 @@ export interface ShortcutOverrides {
   }
 }
 
-/** 主题模式 */
-export type ThemeMode = 'light' | 'dark' | 'system' | 'special'
-
-/** 所有合法的特殊风格值（白名单，新增主题时只需追加这里） */
-export const THEME_STYLES = [
-  'default',
-  'ocean-light',
-  'ocean-dark',
-  'forest-light',
-  'forest-dark',
-  'slate-light',
-  'slate-dark',
-  'terminal-dark',
-] as const
-
-/** 特殊风格主题 */
-export type ThemeStyle = (typeof THEME_STYLES)[number]
-
-/** 默认主题模式 */
-export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
-
-/** 默认特殊风格 */
-export const DEFAULT_THEME_STYLE: ThemeStyle = 'default'
-
 /** 界面风格：经典保留旧版视觉，现代使用当前更克制的 UI */
 export type InterfaceVariant = 'classic' | 'modern'
 
@@ -268,7 +245,7 @@ export interface AppSettings {
   autoCleanupArchivedDays?: number
   /**
    * Agent 代创建 git commit / PR 时是否附加 Proma 推广标识。
-   * 默认 true：commit trailer `Made-with: Proma`，PR body 末尾含 https://proma.cool 与 https://github.com/proma-ai/Proma。
+   * 默认 true：commit trailer `Made-with: Xcode`，PR body 末尾含 https://github.com/maochiy/Xcode。
    * 关闭后不注入任何 Proma 归因，并覆盖 CCB 默认 Co-Authored-By。
    */
   gitAttributionEnabled?: boolean

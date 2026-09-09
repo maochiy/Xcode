@@ -76,7 +76,7 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
       const cmd = input.command
       if (typeof cmd === 'string') {
         // 文档第 3 节：正在运行 <cmd> / 已运行 <cmd>
-        return verb('运行', truncate(cmd, 80))
+        return { label: `已运行 ${truncate(cmd, 80)}`, loadingLabel: `正在运行 ${truncate(cmd, 80)}` }
       }
       return verb('运行', '命令')
     }

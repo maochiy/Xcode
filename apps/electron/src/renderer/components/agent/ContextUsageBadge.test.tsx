@@ -102,4 +102,8 @@ describe('computeCacheHitRate 缓存命中率计算', () => {
     expect(computeCacheHitRate(undefined, undefined)).toBeUndefined()
     expect(computeCacheHitRate(50_000, undefined)).toBeUndefined()
   })
+
+  test('Given 运行中已有累计缓存 When 计算 Then 立即返回命中率', () => {
+    expect(computeCacheHitRate(12_000, 30_000)).toBe(71)
+  })
 })

@@ -17,8 +17,7 @@ import type {
   SDKMessage,
   Task,
 } from '@proma/shared'
-import { CCB_NATIVE_CHANNEL_ID } from '@proma/shared'
-import { findAgentRuntimeModel } from '@/lib/agent-thinking-effort'
+import { buildAgentAppModelOptions } from '@/lib/agent-runtime-model-options'
 
 /** 任务会话自动执行时使用的默认用户提示词 */
 export function buildTaskRunPrompt(task: Task): string {
@@ -38,30 +37,7 @@ export function buildTaskboardModelOptions(input: {
   catalog?: AgentRuntimeModelCatalog
   channels: readonly Channel[]
 }): ModelOption[] {
-  const channelId = input.channelId
-  if (!channelId || channelId === CCB_NATIVE_CHANNEL_ID) return []
-  const channel = input.channels.find(item => item.id === channelId)
-  if (!channel?.enabled) return []
-  const enabledModels = channel.models.filter(model => model.enabled)
-  if (enabledModels.length === 0) return []
-  return enabledModels.map(model => {
-    const runtimeModel = findAgentRuntimeModel(
-      input.catalog?.models ?? [],
-      model.id,
-    )
-    return {
-      channelId: channel.id,
-      channelName: channel.name,
-      modelId: model.id,
-      modelName: model.name || runtimeModel?.displayName || model.id,
-      provider: channel.provider,
-      thinkingEffortLevels:
-        model.thinkingEffortLevels ?? runtimeModel?.supportedEffortLevels,
-      defaultThinkingEffortLevel:
-        model.defaultThinkingEffortLevel ?? runtimeModel?.defaultEffortLevel,
-      ...(runtimeModel ? { runtimeModelInfo: runtimeModel } : {}),
-    }
-  })
+  return buildAgentAppModelOptions(input)
 }
 
 /** 把 SDK 消息中的 assistant 文本块拼接成摘要文本 */

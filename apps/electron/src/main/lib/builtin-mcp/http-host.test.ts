@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { z } from 'zod'
 import { promaBuiltinMcpHttpHost } from './http-host'
+import { createLazyBuiltinMcpServerDefinition } from './lazy-definition'
 import { builtinMcpToolFactory } from './tool-definition'
 
 interface MaterializedHttpConfig {
@@ -52,6 +53,42 @@ afterEach(async () => {
 })
 
 describe('内置 MCP HTTP Host', () => {
+  test('Given 没有已初始化的内置定义 When materialize Then 不启动 HTTP Host', async () => {
+    const logs: string[] = []
+    const originalLog = console.log
+    console.log = (...values: unknown[]) => {
+      logs.push(values.map(String).join(' '))
+    }
+    try {
+      let loadCount = 0
+      const externalConfig = {
+        type: 'http',
+        url: 'http://127.0.0.1:65535/mcp',
+      }
+      const lazyConfig = createLazyBuiltinMcpServerDefinition({
+        name: 'lazy_test',
+        description: '惰性测试服务',
+        load: async () => {
+          loadCount += 1
+          return createEchoServer('lazy')
+        },
+      })
+      const result = await promaBuiltinMcpHttpHost.materialize('empty-session', {
+        external: externalConfig,
+        lazy_test: lazyConfig,
+      })
+
+      expect(result).toEqual({
+        external: externalConfig,
+        lazy_test: lazyConfig,
+      })
+      expect(loadCount).toBe(0)
+      expect(logs.join('\n')).not.toContain('HTTP Host 已启动')
+    } finally {
+      console.log = originalLog
+    }
+  })
+
   test('Given endpoint When 缺少或使用错误 Token Then 返回 401', async () => {
     const config = await materialize('auth-session')
     const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })

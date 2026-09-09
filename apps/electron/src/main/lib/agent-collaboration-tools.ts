@@ -40,6 +40,7 @@ import {
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
 import { isUserInputMessage, extractUserText } from '@proma/session-core'
 import type { BuiltinMcpToolFactory } from './builtin-mcp/tool-definition'
+import { EXECUTABLE_RUNTIME_ID } from './runtime/pi-runtime-policy'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -686,6 +687,8 @@ function startDelegation(
   const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId)
   const rootSessionId = parent?.rootSessionId ?? parent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
+    runtimeId: EXECUTABLE_RUNTIME_ID,
+    runtimeSessionId: undefined,
     parentSessionId: ctx.sessionId,
     rootSessionId,
     sourceDelegationId: delegationId,
@@ -1053,7 +1056,11 @@ export async function injectAgentCollaborationMcpServer(
           record.completion = completionHandle.completion
           record.resolveCompletion = completionHandle.resolveCompletion
 
-          updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
+          updateAgentSessionMeta(record.childSessionId, {
+            runtimeId: EXECUTABLE_RUNTIME_ID,
+            runtimeSessionId: undefined,
+            delegationStatus: 'running',
+          })
           emitDelegationStatusChanged(record)
 
           runRegisteredHeadlessAgent(

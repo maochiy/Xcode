@@ -15,7 +15,10 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { inputToolbarButtonClass } from '@/components/ai-elements/input-toolbar-styles'
 import { cn } from '@/lib/utils'
-import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@proma/shared'
+import {
+  type ChannelPlanQuotaResult,
+  type ChannelPlanQuotaWindow,
+} from '@proma/shared'
 import { fetchChannelPlanQuota } from '@/lib/channel-plan-quota'
 
 /** 显示警告的阈值（压缩阈值的 80%） */
@@ -215,13 +218,9 @@ export function ContextUsageBadge({
   } | null>(null)
   // 会话切换时清空陈旧值，避免新会话尚未上报 usage 时显示上个会话的数字
   const lastSessionRef = React.useRef<string | undefined>(sessionId)
-  // 最近一次「轮次结束」时提交的缓存命中率快照：运行中显示上一次，结束才更新
-  const committedHitRateRef = React.useRef<number | undefined>(undefined)
-  const prevProcessingRef = React.useRef<boolean>(isProcessing)
   React.useEffect(() => {
     if (lastSessionRef.current !== sessionId) {
       stableRef.current = null
-      committedHitRateRef.current = undefined
       lastSessionRef.current = sessionId
     }
   }, [sessionId])
@@ -300,16 +299,7 @@ export function ContextUsageBadge({
   // 分母不含 cacheWrite）
   const displayCumulativeInput = cumulativeInputTokens ?? stable?.cumulativeInputTokens
   const displayCumulativeRead = cumulativeCacheReadTokens ?? stable?.cumulativeCacheReadTokens
-  const cacheHitRate = computeCacheHitRate(displayCumulativeInput, displayCumulativeRead)
-
-  // 轮次提交快照：运行中（isProcessing）显示上一次轮次结束时的命中率；
-  // 本轮结束时把最新累计提交为快照。首轮运行中无快照 → 不显示。
-  const prevProcessing = prevProcessingRef.current
-  prevProcessingRef.current = isProcessing
-  if (!isProcessing && prevProcessing && cacheHitRate != null) {
-    committedHitRateRef.current = cacheHitRate
-  }
-  const displayHitRate = isProcessing ? committedHitRateRef.current : (cacheHitRate ?? committedHitRateRef.current)
+  const displayHitRate = computeCacheHitRate(displayCumulativeInput, displayCumulativeRead)
 
   // 新 Runtime 首次模型调用前可能只有上下文窗口/压缩策略，没有 usage。
   // 仍然保留入口，保证用户可以查看策略并触发手动压缩。
@@ -329,7 +319,6 @@ export function ContextUsageBadge({
   const isWarning = compactThreshold && compactThreshold > 0
     ? visibleTokens / compactThreshold >= WARNING_RATIO
     : false
-
   const ratio = displayWindow ? visibleTokens / displayWindow : 0
 
   const percent = displayWindow

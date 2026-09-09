@@ -21,7 +21,6 @@ import { SettingsView } from '@/components/settings/SettingsView'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
 import {
-  AGENT_SIDE_PANEL_MAX_WIDTH,
   AGENT_SIDE_PANEL_MIN_WIDTH,
   agentSidePanelWidthAtom,
   currentAgentSessionIdAtom,
@@ -54,11 +53,19 @@ import {
 } from '@/lib/sidebar-layout'
 import { cn } from '@/lib/utils'
 
-function clampRightPanelWidth(width: number): number {
+const RIGHT_PANEL_RESIZE_HANDLE_WIDTH = 8
+const MIN_MAIN_AREA_WIDTH = 360
+
+function getRightPanelMaxWidth(): number {
+  if (typeof window === 'undefined') return Number.POSITIVE_INFINITY
   return Math.max(
     AGENT_SIDE_PANEL_MIN_WIDTH,
-    Math.min(AGENT_SIDE_PANEL_MAX_WIDTH, width),
+    window.innerWidth - MIN_MAIN_AREA_WIDTH - RIGHT_PANEL_RESIZE_HANDLE_WIDTH,
   )
+}
+
+function clampRightPanelWidth(width: number, maxWidth = getRightPanelMaxWidth()): number {
+  return Math.max(AGENT_SIDE_PANEL_MIN_WIDTH, Math.min(maxWidth, width))
 }
 
 const MIN_LEFT_SIDEBAR_WIDTH = 260
@@ -263,7 +270,24 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 右侧面板可拖拽宽度
   const [rightPanelWidth, setRightPanelWidth] = useAtom(agentSidePanelWidthAtom)
   const dragging = React.useRef(false)
-  const clampedRightPanelWidth = clampRightPanelWidth(rightPanelWidth)
+  const [viewportWidth, setViewportWidth] = React.useState(() => (
+    typeof window === 'undefined' ? 0 : window.innerWidth
+  ))
+  const rightPanelMaxWidth = React.useMemo(() => {
+    if (!viewportWidth) return Number.POSITIVE_INFINITY
+    return Math.max(
+      AGENT_SIDE_PANEL_MIN_WIDTH,
+      viewportWidth - MIN_MAIN_AREA_WIDTH - RIGHT_PANEL_RESIZE_HANDLE_WIDTH,
+    )
+  }, [viewportWidth])
+  const clampedRightPanelWidth = clampRightPanelWidth(rightPanelWidth, rightPanelMaxWidth)
+
+  React.useEffect(() => {
+    const syncViewportWidth = () => setViewportWidth(window.innerWidth)
+    syncViewportWidth()
+    window.addEventListener('resize', syncViewportWidth)
+    return () => window.removeEventListener('resize', syncViewportWidth)
+  }, [])
 
   React.useEffect(() => {
     if (clampedRightPanelWidth !== rightPanelWidth) {
@@ -271,21 +295,32 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     }
   }, [clampedRightPanelWidth, rightPanelWidth, setRightPanelWidth])
 
-  const handleMouseDown = React.useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
     e.preventDefault()
+    e.stopPropagation()
     dragging.current = true
     const startX = e.clientX
     const startWidth = clampedRightPanelWidth
     // 记录最新光标位置，rAF 回调读取它而非调度时捕获的旧事件，避免快拖时坐标滞后
     let latestClientX = startX
     let rafId = 0
+    const handle = e.currentTarget
+    handle.setPointerCapture(e.pointerId)
+
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    // Electron <webview> 是原生合成层，会吞掉 CSS 上层元素上的 mousemove。
+    // 拖拽期间关掉 guest 命中，手柄才能跟着光标走。
+    const guests = Array.from(document.querySelectorAll('webview, iframe')) as HTMLElement[]
+    guests.forEach((el) => { el.style.pointerEvents = 'none' })
 
     const applyWidth = () => {
       const delta = startX - latestClientX
-      setRightPanelWidth(clampRightPanelWidth(startWidth + delta))
+      setRightPanelWidth(clampRightPanelWidth(startWidth + delta, rightPanelMaxWidth))
     }
 
-    const onMouseMove = (ev: MouseEvent) => {
+    const onPointerMove = (ev: PointerEvent) => {
       if (!dragging.current) return
       latestClientX = ev.clientX
       if (rafId) return
@@ -295,7 +330,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       })
     }
 
-    const onMouseUp = () => {
+    const onPointerUp = () => {
       dragging.current = false
       if (rafId) {
         cancelAnimationFrame(rafId)
@@ -303,13 +338,21 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       }
       // 补一次最终 flush，保证落点停在光标实际位置而非上一帧
       applyWidth()
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
+      if (handle.hasPointerCapture(e.pointerId)) {
+        handle.releasePointerCapture(e.pointerId)
+      }
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      guests.forEach((el) => { el.style.pointerEvents = '' })
+      document.removeEventListener('pointermove', onPointerMove)
+      document.removeEventListener('pointerup', onPointerUp)
+      document.removeEventListener('pointercancel', onPointerUp)
     }
 
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [clampedRightPanelWidth, setRightPanelWidth])
+    document.addEventListener('pointermove', onPointerMove)
+    document.addEventListener('pointerup', onPointerUp)
+    document.addEventListener('pointercancel', onPointerUp)
+  }, [clampedRightPanelWidth, rightPanelMaxWidth, setRightPanelWidth])
 
 
   // 设置页是独立路由，不再渲染普通对话侧栏，因此标题栏从窗口左侧开始。
@@ -410,14 +453,19 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       {/* 独立 drag 条：从折叠按钮右缘开始，到右侧面板之前。
           右侧面板顶栏有自己的 titlebar-no-drag，不需要 drag 条覆盖。
-          drag 条 z-50 低于主区 z-[60]，所以面板按钮始终可点击。 */}
+          drag 条 z-50 低于主区 z-[60]，所以面板按钮始终可点击。
+          面板打开时必须把 right 收到面板左缘：Electron 的 app-region hitmask
+          不完全吃 z-index，铺到右侧会吞掉终端顶部的键盘焦点。 */}
       <div
         className={cn(
           'titlebar-drag-region fixed top-0 z-50 h-[52px]',
-          isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0',
+          !showRightPanel && (isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0'),
         )}
         style={{
           left: titlebarDragLeft,
+          ...(showRightPanel
+            ? { right: clampedRightPanelWidth + (isPanelOpen ? RIGHT_PANEL_RESIZE_HANDLE_WIDTH : 0) }
+            : {}),
           WebkitAppRegion: 'drag',
         } as React.CSSProperties}
         aria-hidden
@@ -427,7 +475,10 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       <WindowControls />
 
 
-      <div className="shell-bg relative h-screen w-screen flex overflow-hidden bg-background">
+      <div
+        data-native-vibrancy={isMac && !isClassic && !isSettingsView && navigator.userAgent.includes('Electron/') ? 'true' : undefined}
+        className="shell-bg relative h-screen w-screen flex overflow-hidden bg-background"
+      >
         {isSettingsView ? (
           <div className="relative z-[60] flex min-w-0 flex-1">
             <SettingsView />
@@ -484,6 +535,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             这里 DOM enter/leave 仅作补充。飞出后整列（含顶部 Code、折叠按钮）都算内侧。 */}
         {sidebarCollapsed && (
           <div
+            data-sidebar-peek
             className={cn(
               'absolute left-0 bottom-0 z-[70] pointer-events-auto',
               sidebarPeeking
@@ -528,13 +580,11 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             {!isClassic && (
               <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 bottom-0 z-10 w-px bg-border/80 dark:bg-border/70" />
             )}
+            {/* 独立占位，不要叠在 webview 上。Electron guest 视图会吞掉覆盖层上的 pointer 事件。 */}
             {isPanelOpen && (
               <div
-                className={cn(
-                  'absolute left-0 top-0 bottom-0 w-[8px] -translate-x-1/2 cursor-col-resize hover:bg-foreground/[0.035] active:bg-primary/20 transition-colors',
-                  isClassic ? 'z-10' : 'z-20'
-                )}
-                onMouseDown={handleMouseDown}
+                className="relative z-[80] w-2 flex-shrink-0 self-stretch cursor-col-resize hover:bg-foreground/[0.035] active:bg-primary/20 transition-colors titlebar-no-drag"
+                onPointerDown={handleMouseDown}
               />
             )}
             <RightSidePanel width={clampedRightPanelWidth} />

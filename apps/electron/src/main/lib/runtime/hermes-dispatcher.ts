@@ -21,6 +21,7 @@ import type {
 import { getRuntimeDispatchRunsPath } from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { dispatchForRequest, type DispatchDecision, type DispatchInput } from './dispatch-policy'
+import { EXECUTABLE_RUNTIME_ID } from './pi-runtime-policy'
 
 export interface DispatchStore {
   runs: DispatchRun[]
@@ -69,7 +70,11 @@ export function setDispatchStoreAdapter(adapter: DispatchStoreAdapter | undefine
 }
 
 function readStore(): DispatchStore {
-  return (storeAdapter ??= defaultStoreAdapter()).read()
+  const adapter = (storeAdapter ??= defaultStoreAdapter())
+  const stored = adapter.read()
+  const migrated = migrateDispatchStoreToPi(stored)
+  if (migrated !== stored) adapter.write(migrated)
+  return migrated
 }
 
 function writeStore(store: DispatchStore): void {
@@ -80,8 +85,45 @@ function now(): number {
   return Date.now()
 }
 
-function harnessIdFor(runtimeId: RuntimeTask['runtimeId']): RuntimeTask['harnessId'] {
-  return runtimeId
+function harnessIdFor(): RuntimeTask['harnessId'] {
+  return EXECUTABLE_RUNTIME_ID
+}
+
+/**
+ * 读取旧任务图时把 runtimeId/harnessId 迁移为 Pi。
+ *
+ * 任务 kind、依赖、审批和状态保持不变，只有可执行内核标识被收敛。
+ */
+export function migrateDispatchStoreToPi(store: DispatchStore): DispatchStore {
+  let changed = false
+  const runs = store.runs.map((run) => {
+    const tasks = run.plan.graph.tasks.map((task) => {
+      if (
+        task.runtimeId === EXECUTABLE_RUNTIME_ID
+        && task.harnessId === EXECUTABLE_RUNTIME_ID
+      ) {
+        return task
+      }
+      changed = true
+      return {
+        ...task,
+        runtimeId: EXECUTABLE_RUNTIME_ID,
+        harnessId: EXECUTABLE_RUNTIME_ID,
+      }
+    })
+    if (!tasks.some((task, index) => task !== run.plan.graph.tasks[index])) return run
+    return {
+      ...run,
+      plan: {
+        ...run.plan,
+        graph: {
+          ...run.plan.graph,
+          tasks,
+        },
+      },
+    }
+  })
+  return changed ? { ...store, runs, updatedAt: now() } : store
 }
 
 function initialTaskStatus(
@@ -111,8 +153,8 @@ function buildTask(
     id,
     title: blueprint.title,
     kind: blueprint.kind,
-    runtimeId: blueprint.runtimeId,
-    harnessId: harnessIdFor(blueprint.runtimeId),
+    runtimeId: EXECUTABLE_RUNTIME_ID,
+    harnessId: harnessIdFor(),
     status: initialTaskStatus(blueprint.kind, blueprint.requiresUserApproval, dependsOn.length > 0),
     dependsOn,
     inputArtifactIds: [],
@@ -322,9 +364,6 @@ export function startDispatchTask(runId: string, taskId: string): DispatchRun {
   const current = refreshTaskReadiness(getRunOrThrow(store, runId))
   const task = current.plan.graph.tasks.find((candidate) => candidate.id === taskId)
   if (!task || task.status !== 'ready') throw new Error('任务当前不可执行，可能仍在等待依赖或审批。')
-  if (task.runtimeId === 'claude' && !current.approvedTaskIds.includes(task.id)) {
-    throw new Error('Claude Code 只能执行 Hermes 生成且用户批准的任务。')
-  }
   const updatedTasks = current.plan.graph.tasks.map((candidate) => candidate.id === taskId
     ? { ...candidate, status: 'running' as const, startedAt: now(), updatedAt: now() }
     : candidate)
@@ -474,12 +513,14 @@ export function toRuntimeExecutionRequest(
     runId: run.id,
     taskId,
     sessionId: input.sessionId,
-    runtimeId: task.runtimeId,
-    harnessId: task.harnessId,
+    runtimeId: EXECUTABLE_RUNTIME_ID,
+    harnessId: EXECUTABLE_RUNTIME_ID,
     prompt: task.prompt,
     cwd: input.cwd,
     model: input.model,
-    modelRoute: input.modelRoute,
+    modelRoute: input.modelRoute
+      ? { ...input.modelRoute, runtimeId: EXECUTABLE_RUNTIME_ID }
+      : undefined,
     contextPacket: input.contextPacket,
   }
 }

@@ -1,9 +1,37 @@
-import type { SDKAssistantMessage, SDKContentBlock, SDKMessage } from '@proma/shared'
+import type { SDKAssistantMessage, SDKContentBlock, SDKMessage, SDKUserMessage } from '@proma/shared'
+import { isUserInputMessage } from '@proma/session-core'
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? value as Record<string, unknown>
     : undefined
+}
+
+export function isNativeAgentMessage(message: SDKMessage): boolean {
+  return (message as Record<string, unknown>)._promaNativeMessage === true
+}
+
+export interface NativeAgentSteeringTurn {
+  uuid: string
+  createdAt: number
+}
+
+/**
+ * Pi 只有在 steering user 实际进入上下文后才推送这条原生消息。
+ * Renderer 以此作为新可见 Turn 的唯一开始信号，不使用点击时间乐观切换。
+ */
+export function getNativeAgentSteeringTurn(
+  message: SDKMessage,
+): NativeAgentSteeringTurn | undefined {
+  if (message.type !== 'user' || !isNativeAgentMessage(message)) return undefined
+  const record = message as Record<string, unknown>
+  if (record._promaQueuedDuringStreaming !== true) return undefined
+  if (typeof record.uuid !== 'string' || record.uuid.length === 0) return undefined
+  if (typeof record._createdAt !== 'number') return undefined
+  return {
+    uuid: record.uuid,
+    createdAt: record._createdAt,
+  }
 }
 
 export function getAssistantModelMessageId(message: SDKMessage): string | undefined {
@@ -58,7 +86,11 @@ function isPausedAssistantMessage(message: SDKMessage): boolean {
 function dedupePausedAssistantMessages(messages: SDKMessage[]): SDKMessage[] {
   const result: SDKMessage[] = []
   for (const message of messages) {
-    if (!isPausedAssistantMessage(message) || getAssistantText(message).trim().length === 0) {
+    if (
+      isNativeAgentMessage(message)
+      || !isPausedAssistantMessage(message)
+      || getAssistantText(message).trim().length === 0
+    ) {
       result.push(message)
       continue
     }
@@ -193,6 +225,10 @@ function removeSupersededPartialMessages(
  * assistant」。未带时间戳的历史消息保留原槽位，避免破坏旧数据。
  */
 function orderMessagesByCreatedAt(messages: SDKMessage[]): SDKMessage[] {
+  // Pi 原生 transcript 已按真实上下文顺序推送并持久化，时间戳只用于展示。
+  // 一旦列表中出现原生消息，就禁止 Renderer 再按时间重排整个序列。
+  if (messages.some(isNativeAgentMessage)) return messages
+
   const timestamped = messages.filter((message) =>
     typeof (message as Record<string, unknown>)._createdAt === 'number',
   )
@@ -231,6 +267,31 @@ export function upsertAgentLiveMessage(
   incoming: SDKMessage,
 ): SDKMessage[] {
   const incomingRecord = incoming as Record<string, unknown>
+  if (isNativeAgentMessage(incoming)) {
+    const incomingUuid = incomingRecord.uuid
+    if (typeof incomingUuid !== 'string' || incomingUuid.length === 0) {
+      return [...current, incoming]
+    }
+
+    const existingIndex = current.findIndex((message) =>
+      (message as Record<string, unknown>).uuid === incomingUuid
+    )
+    if (existingIndex < 0) return [...current, incoming]
+
+    const existing = current[existingIndex] as Record<string, unknown>
+    if (
+      incomingRecord._partial === true
+      || existing._partial === true
+      || existing._promaPausedByUser === true
+      || !isNativeAgentMessage(current[existingIndex]!)
+    ) {
+      const next = [...current]
+      next[existingIndex] = incoming
+      return next
+    }
+    return current
+  }
+
   const incomingMessageId = getAssistantModelMessageId(incoming)
   const originalAssistant = incoming.type === 'assistant' && incomingMessageId
     ? current.find((candidate) => (
@@ -301,6 +362,18 @@ export function mergeAgentLiveMessages(
 }
 
 /**
+ * 消费 queued user 前，先合并同一 session 已经到达的消息前缀。
+ * 该边界顺序必须保持为「旧 assistant/tool → 新 user」。
+ */
+export function mergeAgentLiveMessagesAtQueuedUserBoundary(
+  current: SDKMessage[],
+  pendingPrefix: SDKMessage[],
+  queuedUser: SDKMessage,
+): SDKMessage[] {
+  return mergeAgentLiveMessages(current, [...pendingPrefix, queuedUser])
+}
+
+/**
  * 将旧回合尚未进入 SDK transcript 的流式正文固化到 live projection。
  *
  * 部分 Runtime 只通过 legacy text_delta 推送正文，暂停时正文仍在
@@ -317,7 +390,9 @@ export function preservePausedAgentContent(
 ): SDKMessage[] {
   if (!content) return current
 
-  const lastUserIndex = current.findLastIndex((message) => message.type === 'user')
+  const lastUserIndex = current.findLastIndex((message) =>
+    message.type === 'user' && isUserInputMessage(message as SDKUserMessage),
+  )
   const assistantIndex = current.findLastIndex(
     (message, index) => message.type === 'assistant' && index > lastUserIndex,
   )
@@ -404,7 +479,9 @@ export function preservePausedAgentContent(
  * sdk_message），因此立即发送时不能只保存 legacy content。
  */
 export function markPausedAgentMessages(current: SDKMessage[]): SDKMessage[] {
-  const lastUserIndex = current.findLastIndex((message) => message.type === 'user')
+  const lastUserIndex = current.findLastIndex((message) =>
+    message.type === 'user' && isUserInputMessage(message as SDKUserMessage),
+  )
   let changed = false
   const next = current.map((message, index) => {
     if (index <= lastUserIndex || message.type !== 'assistant') return message
@@ -434,11 +511,10 @@ export function mergePersistedAndLiveMessages(
     identityOf?: (message: SDKMessage) => string
   },
 ): SDKMessage[] {
-  if (live.length === 0) return orderMessagesByCreatedAt(persisted)
-  if (persisted.length === 0) {
-    return orderMessagesByCreatedAt(dedupePausedAssistantMessages(live))
-  }
+  if (persisted.length === 0 && live.length === 0) return []
 
+  const hasNativeMessages = persisted.some(isNativeAgentMessage)
+    || live.some(isNativeAgentMessage)
   const identityOf = options?.identityOf ?? ((message: SDKMessage) => {
     const record = message as Record<string, unknown>
     if (typeof record.uuid === 'string' && record.uuid.length > 0) {
@@ -464,29 +540,51 @@ export function mergePersistedAndLiveMessages(
     const createdAt = typeof record._createdAt === 'number' ? record._createdAt : 'na'
     return `${message.type}:${createdAt}:${JSON.stringify(record.message ?? record.subtype ?? '')}`
   })
+  const mergeIdentityOf = (message: SDKMessage): string => {
+    const uuid = (message as Record<string, unknown>).uuid
+    if (typeof uuid === 'string' && uuid.length > 0) {
+      return `uuid:${uuid}`
+    }
+    return identityOf(message)
+  }
   const createdAtOf = (message: SDKMessage): number | undefined => {
     const value = (message as Record<string, unknown>)._createdAt
     return typeof value === 'number' ? value : undefined
   }
 
   const seen = new Set<string>()
+  const uniquePersistedIndex = new Map<string, number>()
   const uniquePersisted: SDKMessage[] = []
   for (const message of persisted) {
-    const identity = identityOf(message)
+    const identity = mergeIdentityOf(message)
     if (seen.has(identity)) continue
     seen.add(identity)
+    uniquePersistedIndex.set(identity, uniquePersisted.length)
     uniquePersisted.push(message)
   }
 
   const liveOnly: SDKMessage[] = []
   for (const message of dedupePausedAssistantMessages(live)) {
-    const identity = identityOf(message)
-    if (seen.has(identity)) continue
+    const identity = mergeIdentityOf(message)
+    if (seen.has(identity)) {
+      const persistedIndex = uniquePersistedIndex.get(identity)
+      if (
+        persistedIndex != null
+        && isNativeAgentMessage(message)
+        && !isNativeAgentMessage(uniquePersisted[persistedIndex]!)
+      ) {
+        // 普通发送会先插入带 UUID 的乐观 user。原生 user 到达后应在
+        // 相同槽位替换它，保留 Runtime 元数据，但不能改变流顺序。
+        uniquePersisted[persistedIndex] = message
+      }
+      continue
+    }
     // 暂停快照是为了在 JSONL 尚未刷新时保住画面。JSONL 一旦已经
     // 包含相同或更完整的旧回复，就不能再把 live 快照追加一次，否则
     // 同一段旧内容会在界面中重复显示。
     if (
       message.type === 'assistant'
+      && !isNativeAgentMessage(message)
       && (message as Record<string, unknown>)._promaPausedByUser === true
     ) {
       const pausedText = getAssistantText(message)
@@ -502,6 +600,7 @@ export function mergePersistedAndLiveMessages(
     }
     if (
       message.type === 'result'
+      && !isNativeAgentMessage(message)
       && (message as { subtype?: string }).subtype === 'interrupted'
       && uniquePersisted.some((item) =>
         item.type === 'result'
@@ -515,6 +614,11 @@ export function mergePersistedAndLiveMessages(
   }
 
   if (liveOnly.length === 0) return orderMessagesByCreatedAt(uniquePersisted)
+  if (hasNativeMessages) {
+    // 持久化 transcript 是稳定前缀，live 是尚未刷新到磁盘的 IPC 后缀。
+    // 原生消息只按这两个来源的流顺序拼接，不按内容或 _createdAt 干预。
+    return [...uniquePersisted, ...liveOnly]
+  }
 
   const merged: SDKMessage[] = []
   let persistedIndex = 0

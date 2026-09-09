@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { hasSubAgentIntent } from './agent-collaboration-utils'
+import { buildDelegationPrompt, hasSubAgentIntent } from './agent-collaboration-utils'
 
 describe('子 Agent 硬开关意图识别', () => {
   test('Given 用户明确说用多个智能体 When 判断意图 Then 放行', () => {
@@ -25,5 +25,16 @@ describe('子 Agent 硬开关意图识别', () => {
   test('Given 仅提到单个 Agent 而非多个/并行 When 判断意图 Then 拦截', () => {
     expect(hasSubAgentIntent('用 Claude 帮我写代码')).toBe(false)
     expect(hasSubAgentIntent('这个 agent 怎么配置')).toBe(false)
+  })
+
+  test('Given 任意协作角色 When 构建子 Agent 指令 Then 明确统一由 Pi 执行', () => {
+    const prompt = buildDelegationPrompt({
+      parentSessionId: 'parent',
+      delegationId: 'delegation',
+      role: 'implement',
+      task: '实现登录页',
+    })
+    expect(prompt).toContain('实际执行内核始终是 Pi')
+    expect(prompt).toContain('不依赖 Codex 或 Claude Code')
   })
 })

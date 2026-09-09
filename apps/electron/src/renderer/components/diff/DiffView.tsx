@@ -63,10 +63,10 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
     unsafeCSS: `
       :root, :host {
         --diffs-bg: transparent;
-        --diffs-addition-base: rgb(67,167,71);
-        --diffs-deletion-base: rgb(206,66,52);
-        --diffs-addition-bg: light-dark(rgb(228,244,233), rgb(19,34,23));
-        --diffs-deletion-bg: light-dark(rgb(248,231,230), rgb(39,22,20));
+        --diffs-addition-base: var(--diff-added-foreground);
+        --diffs-deletion-base: var(--diff-removed-foreground);
+        --diffs-addition-bg: var(--diff-added);
+        --diffs-deletion-bg: var(--diff-removed);
         --diffs-separator-bg: hsl(var(--background));
         --diffs-gap-style: 3px solid hsl(var(--content-area));
         --diffs-scrollbar-thumb: light-dark(hsl(var(--muted-foreground) / 0.6), hsl(var(--muted-foreground) / 0.2));
@@ -103,12 +103,12 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
       }
       [data-line-type=change-addition] [data-column-number],
       [data-line-type=change-addition] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
-        color: rgb(67,167,71) !important;
+        color: var(--diff-added-foreground) !important;
         background-color: var(--diffs-addition-bg) !important;
       }
       [data-line-type=change-deletion] [data-column-number],
       [data-line-type=change-deletion] [data-gutter-buffer]:not([data-gutter-buffer=buffer]) {
-        color: rgb(206,66,52) !important;
+        color: var(--diff-removed-foreground) !important;
         background-color: var(--diffs-deletion-bg) !important;
       }
       [data-gutter-buffer=buffer] {

@@ -19,6 +19,8 @@ import type { ContextPacket, RuntimeModelRoute } from './runtime-dispatch'
 export interface SDKUserMessageInput {
   type: 'user'
   message: { role: 'user'; content: string }
+  /** 发送给 Runtime 的原始用户文本；message.content 可包含队列上下文增强。 */
+  rawText?: string
   parent_tool_use_id: null
   priority?: 'now' | 'next' | 'later'
   uuid?: string

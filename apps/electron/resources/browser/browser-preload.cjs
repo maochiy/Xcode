@@ -197,8 +197,57 @@ function updateMode(mode) {
   document.documentElement.style.cursor = state.mode === 'element' ? 'crosshair' : state.mode === 'region' ? 'crosshair' : '';
 }
 
-window.addEventListener('DOMContentLoaded', ensureOverlay, { once: true });
+function setDocumentScrollbarsVisible(visible) {
+  document.documentElement.classList.toggle('proma-show-scrollbars', visible);
+  document.body?.classList.toggle('proma-show-scrollbars', visible);
+}
+
+function ensureHoverHorizontalScrollbar() {
+  const apply = () => {
+    if (document.getElementById('proma-hover-h-scrollbar')) return;
+    const style = document.createElement('style');
+    style.id = 'proma-hover-h-scrollbar';
+    style.textContent = `
+      html, body {
+        min-width: 1100px !important;
+        scrollbar-width: none !important;
+      }
+      html.proma-show-scrollbars, body.proma-show-scrollbars {
+        scrollbar-width: thin !important;
+        scrollbar-color: rgb(0 0 0 / 0.28) transparent !important;
+      }
+      html::-webkit-scrollbar, body::-webkit-scrollbar {
+        width: 8px !important;
+        height: 8px !important;
+        display: block !important;
+        background: transparent !important;
+      }
+      html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
+        background: transparent !important;
+      }
+      html.proma-show-scrollbars::-webkit-scrollbar-thumb,
+      body.proma-show-scrollbars::-webkit-scrollbar-thumb {
+        background: rgb(0 0 0 / 0.28) !important;
+        border-radius: 999px;
+        border: 2px solid transparent;
+        background-clip: padding-box;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  };
+  if (document.body) apply();
+  else document.addEventListener('DOMContentLoaded', apply, { once: true });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  ensureOverlay();
+  ensureHoverHorizontalScrollbar();
+}, { once: true });
+ensureHoverHorizontalScrollbar();
 window.addEventListener('pointermove', onPointerMove, true);
 window.addEventListener('pointerdown', onPointerDown, true);
 window.addEventListener('pointerup', onPointerUp, true);
 ipcRenderer.on('proma-browser:set-mode', (_event, mode) => updateMode(mode));
+ipcRenderer.on('proma-browser:set-scrollbar-visible', (_event, visible) => {
+  setDocumentScrollbarsVisible(visible === true);
+});

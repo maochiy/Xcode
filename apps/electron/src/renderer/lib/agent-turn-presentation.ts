@@ -98,6 +98,7 @@ export interface AgentTurnPresentation {
    * 当前界面默认直接展示的活动（折叠收起时）。
    *
    * 流式收起态：只显示最新一行可折叠活动（替换），并保留不进折叠的过程正文。
+   * 非流式停止态：保留完整活动，由渲染层决定默认展开或响应手动折叠。
    * 展开整轮折叠后由渲染层改用完整 activities。
    */
   visibleActivities: AgentActivityItem[]
@@ -490,6 +491,15 @@ function isPartialAssistantSnapshot(message: SDKAssistantMessage): boolean {
   return (message as unknown as Record<string, unknown>)._partial === true
 }
 
+function isNativeMessage(message: SDKMessage): boolean {
+  return (message as unknown as Record<string, unknown>)._promaNativeMessage === true
+}
+
+function isNativeTurn(turn: AssistantTurn): boolean {
+  return turn.assistantMessages.some(isNativeMessage)
+    || turn.turnMessages.some(isNativeMessage)
+}
+
 function snapshotHasSameLogicalBlock(
   left: SDKAssistantMessage,
   right: SDKAssistantMessage,
@@ -563,13 +573,34 @@ export function dedupeAssistantSnapshotsForPresentation(
   },
 ): SDKAssistantMessage[] {
   const result: SDKAssistantMessage[] = []
+  const nativeIndexes = new Map<string, number>()
 
   for (const message of messages) {
+    if (isNativeMessage(message)) {
+      const nativeUuid = typeof message.uuid === 'string' && message.uuid
+        ? message.uuid
+        : undefined
+      const existingIndex = nativeUuid
+        ? nativeIndexes.get(nativeUuid)
+        : undefined
+      if (existingIndex === undefined) {
+        if (nativeUuid) nativeIndexes.set(nativeUuid, result.length)
+        result.push(message)
+      } else {
+        // Pi 原生 partial/final 共享 UUID。最终快照只替换该身份原来的槽位，
+        // 不按正文相似度合并其他 UUID，也不改变消息生命周期顺序。
+        result[existingIndex] = message
+      }
+      continue
+    }
+
     const messageId = getAssistantMessageId(message)
     let duplicateIndex = -1
 
     for (let index = 0; index < result.length; index += 1) {
       const existing = result[index]!
+      // 原生消息只按 UUID 去重，不能参与旧 Runtime 的文本/逻辑 block 猜测。
+      if (isNativeMessage(existing)) continue
       const existingMessageId = getAssistantMessageId(existing)
       const sameMessageId = messageId != null
         && existingMessageId != null
@@ -594,6 +625,7 @@ export function dedupeAssistantSnapshotsForPresentation(
         && (isPartialAssistantSnapshot(message) || isPausedAssistantSnapshot(message))
       ) {
         duplicateIndex = result.findIndex((existing) => {
+          if (isNativeMessage(existing)) return false
           const existingText = getAssistantSnapshotText(existing)
           if (existingText.trim().length === 0) return false
           if (
@@ -614,6 +646,7 @@ export function dedupeAssistantSnapshotsForPresentation(
       const messageText = getAssistantSnapshotText(message)
       if (messageText.trim().length > 0) {
         duplicateIndex = result.findIndex((existing) => {
+          if (isNativeMessage(existing)) return false
           const existingText = getAssistantSnapshotText(existing)
           return existingText.trim().length > 0
             && (
@@ -653,13 +686,17 @@ function assistantMessageContainsAnswer(
 export function orderAssistantMessagesForPresentation(
   turn: AssistantTurn,
 ): SDKAssistantMessage[] {
-  const resultAnswer = extractResultAnswer(turn.turnMessages)
   const assistantMessages = dedupeAssistantSnapshotsForPresentation(
     turn.assistantMessages,
     {
       allowCrossIdentityTextSnapshots: isTurnStoppedByUser(turn.turnMessages),
     },
   )
+  // Pi 原生 transcript 已提供严格生命周期顺序；result.result 是整次 run
+  // （可能跨多个原生 turn）的累计文本，不能据此移动某条 assistant。
+  if (isNativeTurn(turn)) return assistantMessages
+
+  const resultAnswer = extractResultAnswer(turn.turnMessages)
   if (!resultAnswer) return assistantMessages
 
   const finalMessageIds = new Set(
@@ -974,7 +1011,7 @@ export function resolveVisibleTurnActivities(
     isStreaming?: boolean
     fullTranscript?: boolean
     finalAnswerStarted?: boolean
-    /** 用户停止后收起态也走同一套「当前阶段一行」逻辑 */
+    /** 显式请求使用「当前阶段一行」的收起表面。 */
     collapsedSurface?: boolean
   },
 ): AgentActivityItem[] {
@@ -1066,11 +1103,17 @@ function mergeAdjacentThinkingBlocks(
 export function buildAgentTurnPresentation(
   input: BuildAgentTurnPresentationInput,
 ): AgentTurnPresentation {
-  const projected = projectMissingToolUseActivities(
-    input.turn,
-    input.blocks,
-    input.forcedActivityIndexes,
-  )
+  const nativeTurn = isNativeTurn(input.turn)
+  const projected = nativeTurn
+    ? {
+        blocks: input.blocks,
+        forcedActivityIndexes: new Set(input.forcedActivityIndexes),
+      }
+    : projectMissingToolUseActivities(
+        input.turn,
+        input.blocks,
+        input.forcedActivityIndexes,
+      )
   const mergedBlocks = mergeAdjacentThinkingBlocks(
     projected.blocks,
     projected.forcedActivityIndexes,
@@ -1082,7 +1125,12 @@ export function buildAgentTurnPresentation(
   // 提前判定用户停止：后续分类不能把过程正文因 !isStreaming 提升为最终回答
   const stoppedByUserEarly = Boolean(input.stoppedByUser)
     || isTurnStoppedByUser(input.turn.turnMessages)
-  const resultAnswer = extractResultAnswer(input.turn.turnMessages)
+  // 用户停止/立即发送时，Runtime 的 error_during_execution.result 往往是
+  // 已输出过程正文的拼接副本，不是新的最终回答。若继续把它作为 result
+  // fallback 注入 finalItems，同一段旧内容会在停止轮中再显示一次。
+  const resultAnswer = nativeTurn || stoppedByUserEarly
+    ? undefined
+    : extractResultAnswer(input.turn.turnMessages)
   const resultAnswerIndexes = new Set<number>()
   if (resultAnswer) {
     blocks.forEach((block, index) => {
@@ -1119,10 +1167,6 @@ export function buildAgentTurnPresentation(
       // 用户暂停：绝不能因 isStreaming 变 false 把活动区内过程/半成品正文提升为 final，
       // 否则 visibleActivities 丢掉多条过程正文，暂停后只剩状态行。
       && !stoppedByUserEarly
-      && (
-        !input.isStreaming
-        || areToolsBeforeCompleted(blocks, candidate, completedToolIds)
-      )
     ) {
       finalTextStart = candidate
     }
@@ -1231,8 +1275,6 @@ export function buildAgentTurnPresentation(
     isStreaming: input.isStreaming,
     fullTranscript: input.fullTranscript,
     finalAnswerStarted,
-    // 停止轮收起态与运行中一致：只显示最新一行
-    collapsedSurface: stoppedByUser,
   })
 
   return {

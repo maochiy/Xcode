@@ -636,16 +636,23 @@ export const UserMessageContent = React.memo(
     const [shouldCollapse, setShouldCollapse] = React.useState(false)
     const contentRef = React.useRef<HTMLDivElement>(null)
 
-    // 检测内容是否超过阈值行数
+    // 内容或列宽变化都重新测量，避免侧栏收起后短消息仍残留“展开全部”。
     React.useEffect(() => {
       if (!contentRef.current) return
 
       const element = contentRef.current
-      const lineHeight = parseFloat(getComputedStyle(element).lineHeight)
-      const maxHeight = lineHeight * COLLAPSE_LINE_THRESHOLD
-
-      // scrollHeight 超过最大高度 + 容差时折叠
-      setShouldCollapse(element.scrollHeight > maxHeight + 10)
+      const measure = (): void => {
+        const lineHeight = parseFloat(getComputedStyle(element).lineHeight)
+        const maxHeight = lineHeight * COLLAPSE_LINE_THRESHOLD
+        // 隐藏标签页尚无有效尺寸，等可见后再判断。
+        if (!Number.isFinite(lineHeight) || element.clientWidth === 0) return
+        setShouldCollapse(element.scrollHeight > maxHeight + 10)
+      }
+      measure()
+      const observer = new ResizeObserver(measure)
+      observer.observe(element)
+      if (element.firstElementChild) observer.observe(element.firstElementChild)
+      return () => observer.disconnect()
     }, [children])
 
     const toggleExpand = React.useCallback(() => {

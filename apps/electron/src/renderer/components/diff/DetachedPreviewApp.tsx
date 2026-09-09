@@ -93,6 +93,7 @@ export function DetachedPreviewApp(): React.ReactElement {
           </div>
         </div>
         <DefaultAppOpenButton
+          key={defaultAppTargetPath}
           filePath={defaultAppTargetPath}
           access={defaultAppAccess}
         />

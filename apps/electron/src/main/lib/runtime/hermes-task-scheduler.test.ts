@@ -4,6 +4,7 @@ import { dispatchForRequest } from './dispatch-policy'
 import {
   approveDispatchTask,
   createDispatchRun,
+  getDispatchRun,
   setDispatchStoreAdapter,
 } from './hermes-dispatcher'
 import { HermesTaskScheduler } from './hermes-task-scheduler'
@@ -45,12 +46,12 @@ describe('Hermes 动态任务调度', () => {
       },
     })
 
-    expect(executed).toEqual(['hermes', 'codex'])
+    expect(executed).toEqual(['pi', 'pi'])
     expect(waiting?.status).toBe('waiting_user')
     expect(waiting?.plan.graph.tasks.find((task) => task.kind === 'implementation')?.status).toBe('waiting_approval')
   })
 
-  test('Given 用户批准实施任务 When 继续驱动 Then Claude Code 后接 Codex 审查和 Pi 汇总', async () => {
+  test('Given 用户批准实施任务 When 继续驱动 Then 实施、审查和汇总角色均由 Pi 执行', async () => {
     let store: { runs: DispatchRun[]; updatedAt: number } = { runs: [], updatedAt: 0 }
     setDispatchStoreAdapter({
       read: () => store,
@@ -96,7 +97,33 @@ describe('Hermes 动态任务调度', () => {
       },
     })
 
-    expect(executed).toEqual(['claude', 'codex', 'pi'])
+    expect(executed).toEqual(['pi', 'pi', 'pi'])
     expect(completed?.status).toBe('completed')
+  })
+
+  test('Given 磁盘任务图仍保存旧 runtimeId/harnessId When 读取 Then 保留任务图并迁移为 Pi', () => {
+    let store: { runs: DispatchRun[]; updatedAt: number } = { runs: [], updatedAt: 0 }
+    setDispatchStoreAdapter({
+      read: () => store,
+      write: (next) => { store = next },
+    })
+    const created = createDispatchRun({
+      sessionId: 'legacy-runtime-session',
+      prompt: '审查实现',
+      decision: dispatchForRequest({ message: '审查实现' }),
+    })
+    const originalTask = store.runs[0]!.plan.graph.tasks[0]!
+    store.runs[0]!.plan.graph.tasks[0] = {
+      ...originalTask,
+      runtimeId: 'claude',
+      harnessId: 'codex',
+    }
+
+    const migrated = getDispatchRun(created.id)
+    expect(migrated?.plan.graph.tasks).toHaveLength(created.plan.graph.tasks.length)
+    expect(migrated?.plan.graph.tasks[0]?.kind).toBe(originalTask.kind)
+    expect(migrated?.plan.graph.tasks[0]?.status).toBe(originalTask.status)
+    expect(migrated?.plan.graph.tasks[0]?.runtimeId).toBe('pi')
+    expect(migrated?.plan.graph.tasks[0]?.harnessId).toBe('pi')
   })
 })

@@ -9,9 +9,9 @@ import type { OpenDialogOptions } from 'electron'
 import { join, resolve, sep, dirname } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { registerIntegratedTerminalIpcHandlers } from './lib/integrated-terminal-manager'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, CCB_NATIVE_CHANNEL_ID, TASKBOARD_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, TASKBOARD_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, NEW_API_AUTH_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -51,12 +51,8 @@ import type {
   FileOrDirectoryDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
-  AgentSessionCatalogSyncedPayload,
-  AgentSessionTranscriptSyncedPayload,
   AgentRuntimeModelCatalog,
   AgentRuntimeModelCatalogDraftInput,
-  CcbNativeModelConfiguration,
-  CcbNativeModelConfigurationUpdate,
   RuntimeSkillCatalog,
   AgentSendInput,
   AgentWorkspace,
@@ -213,7 +209,6 @@ import { clearBrowserSessionData } from './lib/browser/browser-webview.cjs'
 import { setDockBadgeCount } from './lib/dock-badge-service'
 import { activateRuntimePackage, bindNativeRuntime, deleteRuntimePackage, detectRuntime, discoverRuntime, getRuntimeCapabilities, getRuntimeConfig, getRuntimePackageStatus, installRuntimePackage, listRuntimes, refreshRuntimes, unbindNativeRuntime, updateRuntimeConfig } from './lib/runtime/runtime-registry'
 import { getPromaRuntimeModelCatalogStatus } from './lib/runtime/proma-runtime-model-catalog'
-import { shouldSyncLegacyCcbTranscript } from './lib/runtime/runtime-transcript-policy'
 
 import { checkEnvironment } from './lib/environment-checker'
 import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
@@ -259,18 +254,8 @@ import {
   resolveAgentRuntimeModelCatalog,
   resolveDraftAgentRuntimeModelCatalog,
 } from './lib/ccb-runtime/model-catalog-service'
-import {
-  getCcbNativeModelConfiguration,
-  getCcbNativeModelSecret,
-  updateCcbNativeModelConfiguration,
-  updateCcbNativeModelConfigurationFromChannel,
-} from './lib/ccb-runtime/native-model-config-service'
 import { resolveAgentRuntimeSkillCatalog } from './lib/ccb-runtime/skill-catalog-service'
-import {
-  deleteCcbSessionTranscript,
-  syncCcbSessionCatalogs,
-  syncCcbSessionTranscript,
-} from './lib/ccb-runtime/session-catalog-service'
+import { createLegacyCcbUnsupportedError } from './lib/ccb-runtime/legacy-ccb-api'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -352,14 +337,10 @@ import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret, getDin
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
+import { isEditorLikeApp, isIgnoredOpenAppName, KNOWN_EDITORS, rankOpenApps } from './lib/open-app-filter'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
-/** 已知编辑器应用名称白名单（macOS） */
-const KNOWN_EDITORS = [
-  'Visual Studio Code', 'Cursor', 'Sublime Text', 'Windsurf',
-  'Zed', 'CotEditor', 'IntelliJ IDEA', 'Xcode', 'TextEdit',
-]
 
 /**
  * 检查路径是否在允许的目录范围内（解析 symlink）
@@ -566,26 +547,53 @@ function extOf(filePath: string): string {
   return dot > 0 ? base.slice(dot).toLowerCase() : ''
 }
 
+const appIconCache = new Map<string, string>()
+
+function normalizeAppPath(appPath: string): string {
+  return appPath.replace(/[/\\]+$/, '').toLowerCase()
+}
+
+function findCachedAppIcon(appPath: string): string {
+  const cacheKey = normalizeAppPath(appPath)
+  const cached = appIconCache.get(cacheKey)
+  if (cached) return cached
+  for (const info of defaultAppCache.values()) {
+    if (info.iconDataUrl && normalizeAppPath(info.appPath) === cacheKey) {
+      appIconCache.set(cacheKey, info.iconDataUrl)
+      return info.iconDataUrl
+    }
+  }
+  return ''
+}
+
 async function getAppIconDataUrl(appPath: string): Promise<string> {
-  // macOS: 用 sips 把 App bundle 的 .icns 转成 64×64 PNG 再读。
-  // 不要用 nativeImage.createFromPath(.icns) + resize ——某些 Electron 版本对多分辨率 .icns
-  // resize 时会 SIGTRAP 直接崩主进程。
+  const cacheKey = normalizeAppPath(appPath)
+  const cached = findCachedAppIcon(appPath)
+  if (cached) return cached
+
+  let dataUrl = ''
+  // macOS 的 .app 不要走 app.getFileIcon：部分 bundle / 多分辨率 .icns
+  // 会在 nativeImage resize 时 SIGTRAP，直接把主进程打崩，下拉列表也就没了。
   if (process.platform === 'darwin' && appPath.endsWith('.app')) {
-    const dataUrl = await getMacAppIconViaSips(appPath)
-    if (dataUrl) return dataUrl
+    dataUrl = await getMacAppIconViaSips(appPath)
+  } else {
+    try {
+      const icon = await app.getFileIcon(appPath, { size: 'large' })
+      if (!icon.isEmpty()) dataUrl = icon.toDataURL()
+    } catch (error) {
+      console.warn('[DefaultApp] getFileIcon 失败:', appPath, error)
+    }
   }
 
-  const icon = await app.getFileIcon(appPath, { size: 'large' })
-  if (icon.isEmpty()) return ''
-  return icon.toDataURL()
+  if (dataUrl) appIconCache.set(cacheKey, dataUrl)
+  return dataUrl
 }
 
 async function getMacAppIconViaSips(appPath: string): Promise<string> {
-  const { existsSync, readFileSync, unlinkSync, mkdtempSync } = await import('node:fs')
+  const { existsSync, readFileSync, unlinkSync, mkdtempSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
 
-  // 找 .icns 文件
   const resourcesDir = join(appPath, 'Contents', 'Resources')
   const plistPath = join(appPath, 'Contents', 'Info.plist')
   let iconName: string | null = null
@@ -595,7 +603,13 @@ async function getMacAppIconViaSips(appPath: string): Promise<string> {
   }
   const candidates: string[] = []
   if (iconName) candidates.push(join(resourcesDir, iconName.endsWith('.icns') ? iconName : `${iconName}.icns`))
-  candidates.push(join(resourcesDir, 'AppIcon.icns'), join(resourcesDir, 'app.icns'), join(resourcesDir, 'icon.icns'))
+  candidates.push(
+    join(resourcesDir, 'AppIcon.icns'),
+    join(resourcesDir, 'app.icns'),
+    join(resourcesDir, 'icon.icns'),
+    join(resourcesDir, 'Xcode.icns'),
+    join(resourcesDir, 'Code.icns'),
+  )
   const icnsPath = candidates.find((p) => existsSync(p))
   if (!icnsPath) return ''
 
@@ -607,7 +621,7 @@ async function getMacAppIconViaSips(appPath: string): Promise<string> {
     const buf = readFileSync(outPath)
     return `data:image/png;base64,${buf.toString('base64')}`
   } finally {
-    try { if (existsSync(outPath)) unlinkSync(outPath) } catch { /* ignore */ }
+    try { rmSync(tmp, { recursive: true, force: true }) } catch { try { if (existsSync(outPath)) unlinkSync(outPath) } catch { /* ignore */ } }
   }
 }
 
@@ -827,6 +841,9 @@ async function getDefaultAppInfoForFile(
   const cachedInfo = defaultAppCache.get(cacheKey) ?? getCachedDefaultAppInfo(cacheKey)
   if (cachedInfo) {
     defaultAppCache.set(cacheKey, cachedInfo)
+    if (cachedInfo.iconDataUrl) {
+      appIconCache.set(normalizeAppPath(cachedInfo.appPath), cachedInfo.iconDataUrl)
+    }
     return cachedInfo
   }
   if (isFailureCacheFresh(cacheKey)) return null
@@ -898,6 +915,7 @@ if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
   const info: import('@proma/shared').DefaultAppInfo = { name: appName, appPath, iconDataUrl }
   defaultAppCache.set(cacheKey, info)
   defaultAppFailureCache.delete(cacheKey)
+  if (iconDataUrl) appIconCache.set(normalizeAppPath(appPath), iconDataUrl)
   saveCachedDefaultAppInfo(cacheKey, info)
   return info
 }
@@ -915,6 +933,228 @@ function cacheNull(key: string): null {
   return null
 }
 
+const appsForFileCache = new Map<string, Array<{ name: string; appPath: string }>>()
+
+function isSafeOpenAppName(name: string): boolean {
+  return /^[\w .+'\-()]+$/.test(name) && name.length > 0 && name.length <= 120
+}
+
+function appNameFromPath(appPath: string): string {
+  const base = appPath.split(/[\\/]/).pop() || ''
+  return base.replace(/\.app$/i, '').replace(/\.exe$/i, '')
+}
+
+function listInstalledKnownEditors(): import('@proma/shared').EditorApp[] {
+  const home = homedir()
+  if (process.platform === 'darwin') {
+    return KNOWN_EDITORS.flatMap((name) => {
+      const searchPaths = name === 'TextEdit'
+        ? [`/System/Applications/${name}.app`, `/Applications/${name}.app`]
+        : name === 'Xcode'
+          ? [`/Applications/${name}.app`]
+          : [`/Applications/${name}.app`, `${home}/Applications/${name}.app`]
+      const path = searchPaths.find((p) => existsSync(p))
+      return path ? [{ name, path }] : []
+    })
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local')
+    const programFiles = process.env.PROGRAMFILES || 'C:\\Program Files'
+    const candidates: Array<{ name: string; paths: string[] }> = [
+      { name: 'Visual Studio Code', paths: [join(localAppData, 'Programs', 'Microsoft VS Code', 'Code.exe'), join(programFiles, 'Microsoft VS Code', 'Code.exe')] },
+      { name: 'Cursor', paths: [join(localAppData, 'Programs', 'cursor', 'Cursor.exe'), join(localAppData, 'Programs', 'Cursor', 'Cursor.exe')] },
+      { name: 'Sublime Text', paths: [join(programFiles, 'Sublime Text', 'sublime_text.exe')] },
+      { name: 'Windsurf', paths: [join(localAppData, 'Programs', 'Windsurf', 'Windsurf.exe')] },
+    ]
+    return candidates.flatMap((item) => {
+      const path = item.paths.find((p) => existsSync(p))
+      return path ? [{ name: item.name, path }] : []
+    })
+  }
+  const linuxCandidates: Array<{ name: string; paths: string[] }> = [
+    { name: 'Visual Studio Code', paths: ['/usr/bin/code', '/usr/local/bin/code', join(home, '.local/bin/code')] },
+    { name: 'Cursor', paths: ['/usr/bin/cursor', '/usr/local/bin/cursor', join(home, '.local/bin/cursor')] },
+    { name: 'Sublime Text', paths: ['/usr/bin/subl', '/usr/local/bin/subl'] },
+  ]
+  return linuxCandidates.flatMap((item) => {
+    const path = item.paths.find((p) => existsSync(p))
+    return path ? [{ name: item.name, path }] : []
+  })
+}
+
+async function listMacAppsForFile(filePath: string): Promise<Array<{ name: string; appPath: string }>> {
+  const swiftSrc = `import Foundation
+import AppKit
+let path = CommandLine.arguments.dropFirst().first ?? ""
+let url = URL(fileURLWithPath: path)
+if #available(macOS 12.0, *) {
+  for appUrl in NSWorkspace.shared.urlsForApplications(toOpen: url) {
+    print(appUrl.path)
+  }
+} else if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
+  print(appUrl.path)
+}`
+  const r = await runCmd('swift', ['-', filePath], { stdin: swiftSrc, timeoutMs: 8000 })
+  if (r.status !== 0) return []
+  const seen = new Set<string>()
+  const apps: Array<{ name: string; appPath: string }> = []
+  for (const line of r.stdout.split('\n')) {
+    const appPath = line.trim().replace(/\/$/, '')
+    if (!appPath.endsWith('.app')) continue
+    const key = appPath.toLowerCase()
+    if (seen.has(key)) continue
+    const name = appNameFromPath(appPath)
+    if (!name || isIgnoredOpenAppName(name) || !isEditorLikeApp(name, appPath)) continue
+    seen.add(key)
+    apps.push({ name, appPath })
+  }
+  return apps
+}
+
+async function resolveWindowsExeFromName(exeName: string): Promise<{ name: string; appPath: string } | null> {
+  if (!/^[a-zA-Z0-9 _.+()-]+\.exe$/i.test(exeName)) return null
+  const hives = [
+    `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exeName}`,
+    `HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exeName}`,
+  ]
+  for (const hive of hives) {
+    const result = await runCmd('reg', ['query', hive, '/ve'])
+    const exePath = parseWindowsRegistryValue(result.stdout)
+    if (exePath && existsSync(exePath)) {
+      return { name: exeName.replace(/\.exe$/i, ''), appPath: exePath }
+    }
+  }
+  return null
+}
+
+async function listWindowsAppsForFile(filePath: string): Promise<Array<{ name: string; appPath: string }>> {
+  const ext = extOf(filePath)
+  if (!/^\.[a-zA-Z0-9]+$/.test(ext)) return []
+  const apps: Array<{ name: string; appPath: string }> = []
+  const seen = new Set<string>()
+  const add = (item: { name: string; appPath: string } | null): void => {
+    if (!item?.appPath) return
+    const key = item.appPath.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    apps.push(item)
+  }
+
+  const listResult = await runCmd('reg', [
+    'query',
+    `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\${ext}\\OpenWithList`,
+  ])
+  for (const line of listResult.stdout.split(/\r?\n/)) {
+    const match = line.match(/^\s+[a-z]\s+REG_SZ\s+(.+\.exe)\s*$/i)
+    if (match?.[1]) add(await resolveWindowsExeFromName(match[1].trim()))
+  }
+
+  const progIdResult = await runCmd('reg', [
+    'query',
+    `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\${ext}\\OpenWithProgids`,
+  ])
+  for (const line of progIdResult.stdout.split(/\r?\n/)) {
+    const match = line.match(/^\s+(\S+)\s+REG_/)
+    const progId = match?.[1]
+    if (!progId || !isSafeWindowsProgId(progId) || progId.startsWith('AppX')) continue
+    const command = await getWindowsDefaultAppCommand(progId)
+    const appPath = parseWindowsExecutablePath(command)
+    if (appPath && existsSync(appPath)) {
+      add({ name: appNameFromPath(appPath), appPath })
+    }
+  }
+  return apps
+}
+
+async function getAppsInfoForFile(
+  filePath: string,
+  _options?: FileAccessOptions,
+): Promise<import('@proma/shared').DefaultAppInfo[]> {
+  const { resolve: resolvePath } = await import('node:path')
+  const absPath = resolvePath(filePath)
+  const cacheKey = `${process.platform}:${extOf(filePath) || filePath}`
+  let ranked = appsForFileCache.get(cacheKey)
+
+  if (!ranked) {
+    const collected: Array<{ name: string; appPath: string }> = []
+    const seen = new Set<string>()
+    const add = (name: string, appPath: string, force = false): void => {
+      const key = normalizeAppPath(appPath)
+      if (!key || seen.has(key) || isIgnoredOpenAppName(name)) return
+      if (!force && !isEditorLikeApp(name, appPath)) return
+      seen.add(key)
+      collected.push({ name, appPath: appPath.replace(/[/\\]+$/, '') })
+    }
+
+    const defaultInfo = await getDefaultAppInfoForFile(absPath, _options)
+    if (defaultInfo) add(defaultInfo.name, defaultInfo.appPath, true)
+
+    if (process.platform === 'darwin') {
+      for (const app of await listMacAppsForFile(absPath)) add(app.name, app.appPath)
+    } else if (process.platform === 'win32') {
+      for (const app of await listWindowsAppsForFile(absPath)) add(app.name, app.appPath)
+    }
+
+    for (const editor of listInstalledKnownEditors()) add(editor.name, editor.path)
+
+    ranked = rankOpenApps(collected, defaultInfo?.appPath)
+    appsForFileCache.set(cacheKey, ranked)
+    console.log('[DefaultApp] apps-for-file 候选: ext=%s count=%s names=%s', extOf(filePath), ranked.length, ranked.map((item) => item.name).join(','))
+  }
+
+  const infos: import('@proma/shared').DefaultAppInfo[] = []
+  for (const app of ranked) {
+    const iconDataUrl = await getAppIconDataUrl(app.appPath).catch((error) => {
+      console.warn('[DefaultApp] 读取应用图标失败:', app.name, error)
+      return ''
+    })
+    infos.push({ name: app.name, appPath: app.appPath, iconDataUrl })
+  }
+  return infos
+}
+
+async function openPathWithApp(absPath: string, appName?: string): Promise<void> {
+  const { spawn, spawnSync } = await import('node:child_process')
+  if (!appName) {
+    if (process.platform === 'darwin') {
+      spawnSync('open', [absPath], { timeout: 5000 })
+      return
+    }
+    await shell.openPath(absPath)
+    return
+  }
+
+  const looksLikePath = appName.includes('/') || appName.includes('\\') || /\.(app|exe)$/i.test(appName)
+  if (looksLikePath) {
+    const appPath = resolve(appName)
+    if (!existsSync(appPath)) {
+      console.warn('[IPC] shell:system-open-file 应用路径不存在:', appPath)
+      return
+    }
+    if (process.platform === 'darwin') {
+      spawnSync('open', ['-a', appPath, absPath], { timeout: 5000 })
+      return
+    }
+    spawn(appPath, [absPath], { detached: true, stdio: 'ignore' }).unref()
+    return
+  }
+
+  if (!isSafeOpenAppName(appName)) {
+    console.warn('[IPC] shell:system-open-file 拒绝未知应用:', appName)
+    return
+  }
+  if (process.platform === 'darwin') {
+    spawnSync('open', ['-a', appName, absPath], { timeout: 5000 })
+    return
+  }
+  const known = listInstalledKnownEditors().find((item) => item.name.toLowerCase() === appName.toLowerCase())
+  if (known) {
+    spawn(known.path, [absPath], { detached: true, stdio: 'ignore' }).unref()
+    return
+  }
+  await shell.openPath(absPath)
+}
+
 /**
  * 解析应用图标变体的文件路径
  */
@@ -926,27 +1166,6 @@ export function resolveAppIconPath(variantId: string): string | null {
   return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
-/**
- * 启用或编辑当前模型配置时，立即把 Provider、凭证与启用模型同步给 CCB。
- *
- * 未启用配置只保存在 Proma；不会修改 CCB 当前配置。
- */
-function synchronizeEnabledChannelWithCcb(channel: Channel): void {
-  if (!channel.enabled) return
-  const settings = getSettings()
-  updateCcbNativeModelConfigurationFromChannel(
-    channel,
-    decryptApiKey(channel.id),
-    channel.defaultModelId
-      ?? (
-        settings.agentChannelId === channel.id
-          ? settings.agentModelId
-          : undefined
-      ),
-  )
-  clearAgentRuntimeModelCatalogCache()
-}
-
 async function synchronizeNewApiLoginResult(
   result: NewApiLoginResult,
 ): Promise<NewApiLoginResult> {
@@ -955,96 +1174,9 @@ async function synchronizeNewApiLoginResult(
   const channel = getChannelById(channelId)
   if (!channel) return result
 
-  synchronizeEnabledChannelWithCcb(channel)
   clearAgentRuntimeModelCatalogCache(channelId)
-  clearAgentRuntimeModelCatalogCache(CCB_NATIVE_CHANNEL_ID)
   await invalidateAgentRuntimeConfiguration(channelId)
-  await invalidateAgentRuntimeConfiguration(CCB_NATIVE_CHANNEL_ID)
   return result
-}
-
-let agentCatalogBackgroundSync: Promise<void> | undefined
-const agentTranscriptBackgroundSyncs = new Map<string, Promise<void>>()
-
-function broadcastAgentSessionCatalogSynced(
-  payload: AgentSessionCatalogSyncedPayload,
-): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send(
-        AGENT_IPC_CHANNELS.SESSION_CATALOG_SYNCED,
-        payload,
-      )
-    }
-  }
-}
-
-function broadcastAgentSessionTranscriptSynced(
-  payload: AgentSessionTranscriptSyncedPayload,
-): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send(
-        AGENT_IPC_CHANNELS.SESSION_TRANSCRIPT_SYNCED,
-        payload,
-      )
-    }
-  }
-}
-
-/**
- * 会话列表 IPC 必须立即返回 Proma 本地索引；CCB Catalog 只在后台增量同步。
- * 同一时刻只允许一个后台任务，具体的短 TTL 由 session-catalog-service 管理。
- */
-function scheduleAgentCatalogBackgroundSync(): void {
-  if (agentCatalogBackgroundSync) return
-  const task = syncCcbSessionCatalogs()
-    .then(result => {
-      if (result.synchronized && result.changed) {
-        broadcastAgentSessionCatalogSynced({ sessions: result.sessions })
-      }
-    })
-    .catch(error => {
-      console.warn('[CCB Session Catalog] 后台同步失败，继续使用本地 UI 投影:', error)
-    })
-    .finally(() => {
-      if (agentCatalogBackgroundSync === task) {
-        agentCatalogBackgroundSync = undefined
-      }
-    })
-  agentCatalogBackgroundSync = task
-}
-
-/**
- * 打开历史会话时先读本地 JSONL，再后台补齐 CCB Transcript。
- * 相同会话的并发打开共享一个任务，避免重复启动无状态 Worker。
- */
-function scheduleAgentTranscriptBackgroundSync(sessionId: string): void {
-  // 当前 Proma Runtime 的本地 JSONL 已是唯一历史来源，不能在打开会话时
-  // 额外触发旧 CCB Transcript 同步。只有没有 runtimeId 的历史会话保留兼容路径。
-  if (!shouldSyncLegacyCcbTranscript(getAgentSessionMeta(sessionId)?.runtimeId)) return
-  if (agentTranscriptBackgroundSyncs.has(sessionId)) return
-  const task = syncCcbSessionTranscript(sessionId)
-    .then(result => {
-      if (result.synchronized && result.changed) {
-        broadcastAgentSessionTranscriptSynced({
-          sessionId,
-          messages: result.messages,
-        })
-      }
-    })
-    .catch(error => {
-      console.warn(
-        `[CCB Transcript] 后台同步失败，继续使用本地 UI 投影: session=${sessionId}`,
-        error,
-      )
-    })
-    .finally(() => {
-      if (agentTranscriptBackgroundSyncs.get(sessionId) === task) {
-        agentTranscriptBackgroundSyncs.delete(sessionId)
-      }
-    })
-  agentTranscriptBackgroundSyncs.set(sessionId, task)
 }
 
 /**
@@ -1057,14 +1189,6 @@ function broadcastTaskboardChanged(): void {
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
   registerIntegratedTerminalIpcHandlers()
-  const enabledChannel = listChannels().find(channel => channel.enabled)
-  if (enabledChannel) {
-    try {
-      synchronizeEnabledChannelWithCcb(enabledChannel)
-    } catch (error) {
-      console.error('[模型配置] 启动时同步当前配置到 CCB 失败:', error)
-    }
-  }
 
   // ===== 运行时相关 =====
 
@@ -1373,53 +1497,25 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 用系统默认应用打开任意文件（appName 需在 KNOWN_EDITORS 白名单内）
+  // 用系统应用打开文件；appName 可以是应用显示名或应用路径
   ipcMain.handle(
     IPC_CHANNELS.SYSTEM_OPEN_FILE,
     async (_, filePath: string, appName?: string, access?: FileAccessOptions | string[]): Promise<void> => {
-      const { resolve } = await import('node:path')
       const absPath = resolve(filePath)
       const options = normalizeFileAccessOptions(access)
       if (!isPathAllowed(absPath, options)) {
         console.warn('[IPC] shell:system-open-file 拒绝越界路径:', absPath)
         return
       }
-      if (process.platform === 'darwin') {
-        const { spawnSync } = await import('node:child_process')
-        if (appName) {
-          if (!KNOWN_EDITORS.includes(appName)) {
-            console.warn('[IPC] shell:system-open-file 拒绝未知应用:', appName)
-            return
-          }
-          spawnSync('open', ['-a', appName, absPath], { timeout: 5000 })
-        } else {
-          spawnSync('open', [absPath], { timeout: 5000 })
-        }
-      } else {
-        await shell.openPath(absPath)
-      }
+      await openPathWithApp(absPath, appName)
     }
   )
 
-  // 扫描系统中的编辑器应用（仅 macOS）
+  // 扫描系统中的编辑器应用
   ipcMain.handle(
     IPC_CHANNELS.SCAN_EDITORS,
     async (): Promise<import('@proma/shared').EditorApp[]> => {
-      if (process.platform !== 'darwin') return []
-      const { existsSync } = await import('node:fs')
-      const { homedir } = await import('node:os')
-      const home = homedir()
-
-      const editors = KNOWN_EDITORS.map((name) => {
-        const searchPaths = name === 'Xcode' || name === 'TextEdit'
-          ? [`/Applications/${name}.app`]
-          : [`/Applications/${name}.app`, `${home}/Applications/${name}.app`]
-        return { name, paths: searchPaths }
-      })
-
-      return editors
-        .filter((e) => e.paths.some((p) => existsSync(p)))
-        .map((e) => ({ name: e.name, path: e.paths.find((p) => existsSync(p))! }))
+      return listInstalledKnownEditors()
     }
   )
 
@@ -1445,6 +1541,25 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 查询某个文件在本机可用来打开的应用列表（带图标）
+  ipcMain.handle(
+    IPC_CHANNELS.GET_APPS_FOR_FILE,
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<import('@proma/shared').DefaultAppInfo[]> => {
+      if (!filePath || typeof filePath !== 'string') return []
+      try {
+        const options = normalizeFileAccessOptions(access)
+        if (options && !isPathAllowed(filePath, options)) {
+          console.warn('[IPC] shell:get-apps-for-file 拒绝越界路径:', filePath)
+          return []
+        }
+        return await getAppsInfoForFile(filePath, options)
+      } catch (err) {
+        console.warn('[IPC] shell:get-apps-for-file 失败:', err)
+        return []
+      }
+    }
+  )
+
   // ===== 渠道管理相关 =====
 
   // 获取所有渠道（apiKey 保持加密态）
@@ -1465,8 +1580,6 @@ export function registerIpcHandlers(): void {
       const created = createChannel(input)
       const affectedChannelIds = new Set<string>([created.id])
       if (created.enabled) {
-        synchronizeEnabledChannelWithCcb(created)
-        affectedChannelIds.add(CCB_NATIVE_CHANNEL_ID)
         for (const channelId of previouslyEnabledIds) {
           affectedChannelIds.add(channelId)
         }
@@ -1497,8 +1610,6 @@ export function registerIpcHandlers(): void {
       if (runtimeConfigurationChanged) {
         const affectedChannelIds = new Set<string>([id])
         if (updated.enabled) {
-          synchronizeEnabledChannelWithCcb(updated)
-          affectedChannelIds.add(CCB_NATIVE_CHANNEL_ID)
           for (const channelId of previouslyEnabledIds) {
             affectedChannelIds.add(channelId)
           }
@@ -1938,21 +2049,9 @@ export function registerIpcHandlers(): void {
       const result = logoutNewApi()
       const enabledChannelsAfterLogout = listChannels()
         .filter(channel => channel.enabled)
-      const restoredChannel = enabledChannelsAfterLogout[0]
-      if (restoredChannel) {
-        try {
-          synchronizeEnabledChannelWithCcb(restoredChannel)
-        } catch (error) {
-          console.warn(
-            `[New API 登录] 退出后恢复 CCB 模型配置失败，渠道=${restoredChannel.id}:`,
-            error,
-          )
-        }
-      }
       const affectedChannelIds = new Set([
         ...enabledChannelIdsBeforeLogout,
         ...enabledChannelsAfterLogout.map(channel => channel.id),
-        CCB_NATIVE_CHANNEL_ID,
       ])
       for (const channelId of affectedChannelIds) {
         clearAgentRuntimeModelCatalogCache(channelId)
@@ -2269,7 +2368,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.LIST_SESSIONS,
     (): AgentSessionMeta[] => {
       const sessions = listAgentSessions()
-      scheduleAgentCatalogBackgroundSync()
       // 启动所有已有附加目录的文件监听
       for (const session of sessions) {
         if (session.attachedDirectories) {
@@ -2300,9 +2398,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
     (_, id: string): SDKMessage[] => {
-      const messages = getAgentSessionSDKMessages(id)
-      scheduleAgentTranscriptBackgroundSync(id)
-      return messages
+      return getAgentSessionSDKMessages(id)
     }
   )
 
@@ -2339,7 +2435,7 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 读取 CCB 内核解析后的模型能力目录
+  // 直接读取当前渠道配置形成的 Pi 模型能力目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_RUNTIME_MODEL_CATALOG,
     async (
@@ -2354,32 +2450,26 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_NATIVE_MODEL_CONFIG,
-    async (): Promise<CcbNativeModelConfiguration> => {
-      return getCcbNativeModelConfiguration()
+    async (): Promise<never> => {
+      throw createLegacyCcbUnsupportedError('原生模型配置读取')
     },
   )
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_NATIVE_MODEL_SECRET,
-    async (): Promise<string> => {
-      return getCcbNativeModelSecret()
+    async (): Promise<never> => {
+      throw createLegacyCcbUnsupportedError('原生模型密钥读取')
     },
   )
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_NATIVE_MODEL_CONFIG,
-    async (
-      _,
-      input: CcbNativeModelConfigurationUpdate,
-    ): Promise<CcbNativeModelConfiguration> => {
-      const configuration = updateCcbNativeModelConfiguration(input)
-      clearAgentRuntimeModelCatalogCache(CCB_NATIVE_CHANNEL_ID)
-      await invalidateAgentRuntimeConfiguration(CCB_NATIVE_CHANNEL_ID)
-      return configuration
+    async (): Promise<never> => {
+      throw createLegacyCcbUnsupportedError('原生模型配置更新')
     },
   )
 
-  // 读取尚未保存的模型配置经 CCB 内核解析后的能力目录
+  // 直接读取尚未保存的渠道草稿形成的 Pi 模型能力目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_RUNTIME_MODEL_CATALOG_DRAFT,
     async (
@@ -2423,7 +2513,7 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 按当前项目 cwd 读取 CCB + Proma 的完整 Skills
+  // 按当前项目读取 Pi/Proma 工作区 Skills
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_RUNTIME_SKILL_CATALOG,
     async (_, workspaceId: string): Promise<RuntimeSkillCatalog> => {
@@ -2444,11 +2534,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.DELETE_SESSION,
     async (_, id: string): Promise<void> => {
       await closeAgentSessionRuntime(id)
-      // 当前 Proma Runtime 的会话只使用本地 JSONL；仅旧版缺少 runtimeId 的会话
-      // 仍需要清理历史 CCB Transcript。
-      if (!getAgentSessionMeta(id)?.runtimeId) {
-        await deleteCcbSessionTranscript(id)
-      }
       // 清理权限服务中该会话的白名单
       permissionService.clearSessionWhitelist(id)
       permissionService.clearSessionPending(id)
@@ -2639,9 +2724,6 @@ export function registerIpcHandlers(): void {
           stopAgent(sessionId)
         }
         await closeAgentSessionRuntime(sessionId)
-        if (!getAgentSessionMeta(sessionId)?.runtimeId) {
-          await deleteCcbSessionTranscript(sessionId)
-        }
         deleteAgentSession(sessionId)
         // 清理该会话内置浏览器的独立存储（Cookie/localStorage/缓存等）
         void clearBrowserSessionData(sessionId)
@@ -3000,7 +3082,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 独立计划模式开关：持久化 UI 选择，并在运行中同步为 CCB plan/原审批模式。
+  // 独立计划模式开关：持久化 UI 选择，并在运行中同步为 Pi plan/原审批模式。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_PLAN_MODE,
     async (_, sessionId: string, enabled: boolean): Promise<void> => {
@@ -4895,7 +4977,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: '选择迁移文件',
       filters: [
-        { name: 'Proma 迁移文件', extensions: ['proma-backup', 'proma-share'] },
+        { name: 'Xcode 迁移文件', extensions: ['proma-backup', 'proma-share'] },
         { name: '所有文件', extensions: ['*'] },
       ],
       properties: ['openFile'],
@@ -4911,7 +4993,7 @@ export function registerIpcHandlers(): void {
       title: '保存迁移文件',
       defaultPath: defaultName,
       filters: [
-        { name: mode === 'personal' ? 'Proma 个人备份' : 'Proma 分享包', extensions: [ext] },
+        { name: mode === 'personal' ? 'Xcode 个人备份' : 'Xcode 分享包', extensions: [ext] },
       ],
     })
     return result.canceled ? null : result.filePath

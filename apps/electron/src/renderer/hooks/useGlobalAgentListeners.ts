@@ -8,10 +8,12 @@
  */
 
 import { useEffect } from 'react'
+import { removeImmediateUserMessage } from '@/lib/agent-immediate-send'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
 import {
   agentStreamingStatesAtom,
+  agentImmediateUserMessagesAtom,
   agentStreamErrorsAtom,
   agentSessionsAtom,
   agentMessageRefreshAtom,
@@ -33,6 +35,7 @@ import {
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
   finalizeStreamingActivities,
+  finishPendingCompaction,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   agentWorkspacesAtom,
@@ -47,6 +50,7 @@ import {
   agentRuntimeExecutionGraphsAtom,
   agentRuntimePlanLifecycleAtom,
   activateAgentRuntimePlanTodoAtom,
+  beginAgentSteeredTurn,
   beginAgentFloatingPanelTurnAtom,
   interruptAgentRuntimePlanAtom,
   mergeAgentRuntimeExecutionGraphAtom,
@@ -78,6 +82,10 @@ import {
   shouldSuppressAgentStreamError,
 } from '@/lib/agent-running-state'
 import {
+  recordCompletedAgentStreamRun,
+  shouldAcceptAgentStreamRun,
+} from '@/lib/agent-stream-run-guard'
+import {
   getAgentCompletionMarkers,
   notifyAgentCompletion,
 } from '@/lib/agent-completion-presence'
@@ -86,7 +94,11 @@ import {
   updatePlanModeSessionSet,
   updatePlanSuggestionForMode,
 } from '@/lib/agent-plan-mode'
-import { mergeAgentLiveMessages } from '@/lib/agent-live-message'
+import {
+  getNativeAgentSteeringTurn,
+  mergeAgentLiveMessages,
+  mergeAgentLiveMessagesAtQueuedUserBoundary,
+} from '@/lib/agent-live-message'
 import {
   getExplicitRuntimePlanActivationTodoId,
   runtimePlanStatesFromPersistedStore,
@@ -348,10 +360,12 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       if (sMsg.subtype === 'compacting') return [{ type: 'compacting', trigger: sMsg.compactTrigger }]
       if (sMsg.subtype === 'status') {
         if (sMsg.status === 'compacting') return [{ type: 'compacting', trigger: sMsg.compactTrigger }]
-        if (sMsg.compact_result === 'success' || sMsg.compact_result === 'failed' || sMsg.compact_result === 'noop') {
+        if (sMsg.compact_result === 'success' || sMsg.compact_result === 'failed'
+          || sMsg.compact_result === 'noop' || sMsg.compact_result === 'stopped') {
           return [{
             type: 'compact_complete',
             status: sMsg.compact_result,
+            trigger: sMsg.compactTrigger,
             summary: sMsg.summary,
             message: sMsg.compact_error ?? sMsg.message,
           }]
@@ -499,12 +513,25 @@ export function useGlobalAgentListeners(): void {
     /** 待合帧的实时 SDK 消息，按 session 隔离，确保后台会话不会阻塞当前会话。 */
     const pendingLiveMessages = new Map<string, PendingLiveMessage[]>()
     const liveMessageFlushFrames = new Map<string, number>()
+    /**
+     * 已收到 STREAM_COMPLETE 的最新回合。
+     *
+     * 完成通知与 SDK 尾部事件走不同 IPC 通道，尾部事件可能在完成通知
+     * 之后到达。没有这层屏蔽时，reconcileAgentRunActivity 会把已结束
+     * 的 session 再次改回 running。
+     */
+    const completedRunStartedAt = new Map<string, number>()
+    /** 已处理的 Pi 原生 steering user UUID，避免重复事件重复重置可见 Turn。 */
+    const nativeSteeringTurnIds = new Set<string>()
 
     /**
      * 将一个 session 的实时消息一次性写入 atom。
      * 合帧只延迟渲染，不改变消息到达顺序；完成/错误/卸载前会主动 flush。
      */
-    const flushLiveMessages = (sessionId: string): void => {
+    const flushLiveMessages = (
+      sessionId: string,
+      queuedUserBoundary?: SDKMessage,
+    ): void => {
       const frame = liveMessageFlushFrames.get(sessionId)
       if (frame !== undefined) {
         window.cancelAnimationFrame(frame)
@@ -512,25 +539,28 @@ export function useGlobalAgentListeners(): void {
       }
 
       const pending = pendingLiveMessages.get(sessionId)
-      if (!pending || pending.length === 0) return
-      pendingLiveMessages.delete(sessionId)
+      if (pending) pendingLiveMessages.delete(sessionId)
 
       // 合帧期间可能跨过“立即发送”切换点：旧 Runtime 的消息进入
       // pending 后，新回合已经建立。此时不能再把旧快照写回 live。
       const currentStartedAt = store.get(agentStreamingStatesAtom).get(sessionId)?.startedAt
-      const currentPending = pending.filter((entry) =>
+      const currentPending = (pending ?? []).filter((entry) =>
         entry.runStartedAt == null
         || currentStartedAt == null
         || entry.runStartedAt >= currentStartedAt,
       )
-      if (currentPending.length === 0) return
+      if (currentPending.length === 0 && !queuedUserBoundary) return
 
       store.set(liveMessagesMapAtom, (prev) => {
         const current = prev.get(sessionId) ?? []
-        const next = mergeAgentLiveMessages(
-          current,
-          currentPending.map((entry) => entry.message),
-        )
+        const pendingPrefix = currentPending.map((entry) => entry.message)
+        const next = queuedUserBoundary
+          ? mergeAgentLiveMessagesAtQueuedUserBoundary(
+              current,
+              pendingPrefix,
+              queuedUserBoundary,
+            )
+          : mergeAgentLiveMessages(current, pendingPrefix)
         if (next === current) return prev
         const map = new Map(prev)
         map.set(sessionId, next)
@@ -831,31 +861,22 @@ export function useGlobalAgentListeners(): void {
     )
 
     // ===== 1. 流式事件 =====
-    // [FLASH-DEBUG] 事件频率计数器
-    let eventCount = 0
-    let lastLogTime = Date.now()
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
       (streamEvent: AgentStreamEvent) => {
-        // [FLASH-DEBUG] 每 2 秒输出一次事件频率
-        eventCount++
-        const now = Date.now()
-        if (now - lastLogTime >= 2000) {
-          console.log(`[FLASH-DEBUG] GlobalListener: ${eventCount} events in ${((now - lastLogTime) / 1000).toFixed(1)}s (${(eventCount / ((now - lastLogTime) / 1000)).toFixed(1)} evt/s)`)
-          eventCount = 0
-          lastLogTime = now
-        }
-
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
-        const currentStartedAt = store.get(agentStreamingStatesAtom).get(sessionId)?.startedAt
+        const currentState = store.get(agentStreamingStatesAtom).get(sessionId)
+        const currentStartedAt = currentState?.startedAt
         // “立即发送”会先在 Renderer 展示新回合，再等待旧 Runtime 收尾。
         // 旧 Runtime 的尾部事件仍可能晚到；按 runStartedAt 丢弃它们，
         // 防止旧正文/工具状态写进新回合。
-        if (
-          payload.runStartedAt != null
-          && currentStartedAt != null
-          && payload.runStartedAt < currentStartedAt
-        ) {
+        if (!shouldAcceptAgentStreamRun({
+          payloadRunStartedAt: payload.runStartedAt,
+          currentRunStartedAt: currentStartedAt,
+          completedRunStartedAt: completedRunStartedAt.get(sessionId),
+          currentRunRunning: currentState?.running === true,
+        })) {
+          console.log(`[Agent 流] 丢弃已完成或旧回合尾部事件: sessionId=${sessionId.slice(0, 8)}`)
           return
         }
 
@@ -909,6 +930,39 @@ export function useGlobalAgentListeners(): void {
         // Phase 2: 直接累积 SDKMessage 到 liveMessagesMapAtom（跳过 replay 消息，避免与持久化消息重复）
         if (payload.kind === 'sdk_message') {
           const msgRecord = payload.message as Record<string, unknown>
+          const nativeSteeringTurn = getNativeAgentSteeringTurn(payload.message)
+          if (nativeSteeringTurn && !msgRecord.isReplay) {
+            // 消费确认是消息顺序边界：先用旧回合状态同步冲刷已经到达的
+            // assistant/tool 前缀，再写入 queued user，之后才能切换新 Turn。
+            flushLiveMessages(sessionId, payload.message)
+            store.set(agentImmediateUserMessagesAtom, (prev) =>
+              removeImmediateUserMessage(prev, sessionId, nativeSteeringTurn.uuid),
+            )
+            const steeringKey = `${sessionId}:${nativeSteeringTurn.uuid}`
+            if (!nativeSteeringTurnIds.has(steeringKey)) {
+              nativeSteeringTurnIds.add(steeringKey)
+              store.set(agentStreamingStatesAtom, (prev) => {
+                const current = prev.get(sessionId)
+                if (!current) return prev
+                const map = new Map(prev)
+                map.set(
+                  sessionId,
+                  beginAgentSteeredTurn(current, nativeSteeringTurn.createdAt),
+                )
+                return map
+              })
+              store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
+                if (!prev.has(sessionId)) return prev
+                const next = new Set(prev)
+                next.delete(sessionId)
+                return next
+              })
+              store.set(beginAgentFloatingPanelTurnAtom, {
+                sessionId,
+                epoch: nativeSteeringTurn.createdAt,
+              })
+            }
+          }
           // prompt_suggestion 不是对话转录消息，不能进入 liveMessages（会被错误渲染到最后一条助手消息中）
           // 它通过下方 legacyEvents 分支写入 agentPromptSuggestionsAtom，显示在输入框上方
           if (msgRecord.type === 'prompt_suggestion') {
@@ -947,13 +1001,17 @@ export function useGlobalAgentListeners(): void {
               }
             }
 
-            const pending = pendingLiveMessages.get(sessionId) ?? []
-            pending.push({
-              message: payload.message,
-              runStartedAt: payload.runStartedAt,
-            })
-            pendingLiveMessages.set(sessionId, pending)
-            scheduleLiveMessageFlush(sessionId)
+            if (nativeSteeringTurn) {
+              // queued user 已在上方消费边界与此前缀同步写入。
+            } else {
+              const pending = pendingLiveMessages.get(sessionId) ?? []
+              pending.push({
+                message: payload.message,
+                runStartedAt: payload.runStartedAt,
+              })
+              pendingLiveMessages.set(sessionId, pending)
+              scheduleLiveMessageFlush(sessionId)
+            }
           }
         }
 
@@ -1241,7 +1299,6 @@ export function useGlobalAgentListeners(): void {
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
-        console.log(`[FLASH-DEBUG] STREAM_COMPLETE for session=${data.sessionId.slice(0, 8)}, stoppedByUser=${data.stoppedByUser}, resultSubtype=${data.resultSubtype}`)
         unstable_batchedUpdates(() => {
         // 完成事件可能早于最后一个逐帧刷新回调，先收尾实时消息再刷新持久化投影。
         flushLiveMessages(data.sessionId)
@@ -1268,6 +1325,16 @@ export function useGlobalAgentListeners(): void {
             )
           )
         )
+        if (isCurrentCompletion) {
+          const completedAt = data.startedAt ?? streamBeforeCompletion?.startedAt
+          const nextCompletedAt = recordCompletedAgentStreamRun(
+            completedRunStartedAt.get(data.sessionId),
+            completedAt,
+          )
+          if (nextCompletedAt != null) {
+            completedRunStartedAt.set(data.sessionId, nextCompletedAt)
+          }
+        }
         if (isCurrentCompletion) bumpDiffRefresh(data.sessionId)
 
         // 发送桌面通知（仅真正成功完成时播放提示音，错误/中断/异常完成不伪装成完成）
@@ -1311,7 +1378,10 @@ export function useGlobalAgentListeners(): void {
           if (!current || (!current.running && !current.backgroundWaiting && !current.stopping)) {
             return prev
           }
-          if (current.startedAt != null && (data.startedAt == null || current.startedAt > data.startedAt)) {
+          if (current.startedAt != null && (
+            data.startedAt == null
+            || current.startedAt > data.startedAt
+          )) {
             return prev
           }
           const map = new Map(prev)
@@ -1319,14 +1389,13 @@ export function useGlobalAgentListeners(): void {
             ...current,
             running: false,
             stopping: false,
-            // 压缩未收到终态事件（如用户在压缩中暂停）时，在流结束时收尾：
-            // 收不到失败信息则按成功收敛，确保对话流显示「上下文已压缩 / 上下文已自动压缩」。
+            // 压缩成功必须有原生完成事件；停止或缺失确认不能伪装成成功。
             ...(current.isCompacting && {
               isCompacting: false,
-              contextCompaction: {
-                status: 'success' as const,
-                trigger: current.contextCompaction?.trigger,
-              },
+              contextCompaction: finishPendingCompaction(
+                current.contextCompaction,
+                data.stoppedByUser === true || current.stopping === true,
+              ),
             }),
             // backgroundTasksPending=true → 进入/保持软空闲态（通道仍开着，handleSend 走注入路径）；
             // false → 真正结束，清除软空闲态，新消息回到新建 run 路径。

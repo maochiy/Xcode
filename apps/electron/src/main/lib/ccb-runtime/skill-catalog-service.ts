@@ -1,14 +1,15 @@
 import { existsSync, statSync } from 'node:fs'
-import type { RuntimeSkillCatalog } from '@proma/shared'
-import { getAgentWorkspace } from '../agent-workspace-manager'
-import { getWorkspaceSkillsDir } from '../config-paths'
-import { ccbDesktopRuntimeClient } from './runtime-client'
-import type { CcbRuntimeSkillCatalog } from './protocol'
-import { assertCcbRuntimeSkillCatalog } from './protocol-validation'
-import { sanitizeCcbSessionEnvironment } from './runtime-security'
-import { getCcbUserConfigDir } from './user-config'
+import type {
+  RuntimeSkillCatalog,
+} from '@proma/shared'
+import {
+  getAgentWorkspace,
+  getAllWorkspaceSkills,
+} from '../agent-workspace-manager'
+import { getInactiveSkillsDir, getWorkspaceSkillsDir } from '../config-paths'
+import { buildPiWorkspaceSkillCatalog } from './pi-workspace-skill-catalog'
 
-/** 按当前本机项目 cwd 解析 CCB + Proma 的完整 Skill Catalog。 */
+/** 按当前项目读取 Pi/Proma 工作区 Skills。 */
 export async function resolveAgentRuntimeSkillCatalog(
   workspaceId: string,
 ): Promise<RuntimeSkillCatalog> {
@@ -20,28 +21,12 @@ export async function resolveAgentRuntimeSkillCatalog(
     throw new Error(`项目目录不可用，请重新添加项目：${projectPath}`)
   }
 
-  const environment = sanitizeCcbSessionEnvironment(process.env)
-  const result = await ccbDesktopRuntimeClient.request<CcbRuntimeSkillCatalog>(
+  return buildPiWorkspaceSkillCatalog(
+    workspace,
+    getAllWorkspaceSkills(workspace.slug),
     {
-      type: 'session.resolveSkillCatalog',
-      options: {
-        cwd: projectPath,
-        additionalSkillDirectories: [getWorkspaceSkillsDir(workspace.slug)],
-        permissionMode: 'default',
-        environment: {
-          variables: environment,
-          configDir: getCcbUserConfigDir(),
-        },
-      },
+      active: getWorkspaceSkillsDir(workspace.slug),
+      inactive: getInactiveSkillsDir(workspace.slug),
     },
-    `__skill-catalog__:${workspace.id}`,
-    30_000,
   )
-  assertCcbRuntimeSkillCatalog(result)
-  const runtime = ccbDesktopRuntimeClient.getRuntimeInfo()
-  return {
-    ...result,
-    runtimeVersion: runtime?.runtimeVersion,
-    runtimeArtifactCommit: runtime?.gitCommit,
-  }
 }

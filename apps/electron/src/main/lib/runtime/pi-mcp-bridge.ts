@@ -1,29 +1,36 @@
 /**
- * Pi Runtime MCP 桥接。
- *
- * Proma 主进程把内置/外部 MCP Server 编译为 HTTP 端点（materialize 后）放进
- * `AgentQueryInput.mcpServers`。Pi Worker 本身不带 MCP client，这里在宿主侧
- * 连接这些端点、列出工具，并把工具转成 Pi `customTools` 可识别的 externalTools
- * 通过 startRun 传给 Worker；Worker 调用工具时经 `tool.request` 桥回到这里，
- * 再由 MCP client 转发到对应 Server。collaboration 子 Agent 工具（delegate_*）
- * 就是通过这条链路暴露给 Pi 的。
+ * Pi MCP 按需桥接：配置目录不启动服务，发现目标服务时才加载工具定义。
+ * 内置服务复用宿主定义与 execute；外部服务使用 MCP Client。连接按 Session 隔离。
  */
-
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-
-/** 传给 Pi Worker 的外部工具描述（parameters 为 JSON Schema，TypeBox 兼容）。 */
-export interface PiExternalTool {
-  name: string
-  label?: string
-  description?: string
-  promptSnippet?: string
-  parameters?: Record<string, unknown>
-}
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { z } from 'zod'
+import { isBuiltinMcpServerDefinition, isLazyBuiltinMcpServerDefinition } from '../builtin-mcp/tool-definition'
+import type { BuiltinMcpServerDefinition } from '../builtin-mcp/tool-definition'
+import { parsePiMcpCall, type PiExternalTool } from './pi-mcp-tools'
+export type { PiExternalTool } from './pi-mcp-tools'
 
 interface McpServerConnection {
-  client: Client
+  client?: Client
+  builtin?: BuiltinMcpServerDefinition
   tools: PiExternalTool[]
+  originalNames: Map<string, string>
+}
+
+interface McpServerEntry {
+  config: Record<string, unknown>
+  revision: string
+  connection?: McpServerConnection
+  pending?: Promise<McpServerConnection>
+  abortController: AbortController
+  connectingClient?: Client
+}
+
+export interface PiMcpCatalogEntry {
+  server: string
+  description: string
 }
 
 interface PiToolTextContent {
@@ -40,6 +47,7 @@ interface PiToolImageContent {
 interface PiRichToolResult {
   content: Array<PiToolTextContent | PiToolImageContent>
   details: unknown
+  isError?: boolean
 }
 
 export function normalizePiMcpToolResult(result: {
@@ -59,8 +67,8 @@ export function normalizePiMcpToolResult(result: {
     }
     return []
   })
-  if (normalized.some((block) => block.type === 'image')) {
-    return { content: normalized, details: result }
+  if (result.isError || normalized.some((block) => block.type === 'image')) {
+    return { content: normalized, details: result, ...(result.isError === true ? { isError: true } : {}) }
   }
   const text = normalized
     .filter((block): block is PiToolTextContent => block.type === 'text')
@@ -69,87 +77,192 @@ export function normalizePiMcpToolResult(result: {
   return text || result
 }
 
-/**
- * 连接 mcpServers 中的 HTTP 端点并聚合工具列表。
- * 仅处理 `type: 'http'` 的端点（Proma 内置工具 materialize 后的形态）；
- * stdio 外部 server 不在 Pi 桥接范围内（保持简单，避免在宿主侧管理子进程）。
- */
-export class PiMcpBridge {
-  private readonly connections: McpServerConnection[] = []
-  private readonly toolToClient = new Map<string, Client>()
-  /** 已编译好的外部工具列表缓存：同一 session 跨轮复用连接，避免重复 initialize 被 server 拒绝 */
-  private cachedTools: PiExternalTool[] | null = null
+/** 配置摘要只用于本地比较，绝不进入模型上下文或日志。 */
+function configRevision(config: Record<string, unknown>): string {
+  if (isLazyBuiltinMcpServerDefinition(config)) {
+    return JSON.stringify([config.kind, config.name, config.revision || ''])
+  }
+  if (isBuiltinMcpServerDefinition(config)) return JSON.stringify([config.kind, config.name, config.version])
+  return JSON.stringify(config)
+}
 
-  /** 连接所有 HTTP MCP 端点，返回可传给 Pi Worker 的 externalTools。 */
-  async collectExternalTools(mcpServers: Record<string, unknown> | undefined): Promise<PiExternalTool[]> {
-    // 幂等：已有连接与工具缓存时直接复用，不重复 connect。
-    // Proma 内置 MCP HTTP Host 的 StreamableHTTP 端点是 stateful 单会话的，
-    // 同一 endpoint 第二次 initialize 会被 server 以 "Server already initialized" 拒绝。
-    if (this.cachedTools) return this.cachedTools
-    if (!mcpServers) return []
-    const collected: PiExternalTool[] = []
-    for (const [serverName, rawConfig] of Object.entries(mcpServers)) {
-      const config = (rawConfig && typeof rawConfig === 'object' ? rawConfig : {}) as Record<string, unknown>
-      if (config?.type !== 'http' || typeof config.url !== 'string') continue
-      try {
-        const client = new Client({ name: `proma-pi-${serverName}`, version: '1.0.0' })
-        const headers = (config.headers && typeof config.headers === 'object')
-          ? config.headers as Record<string, string>
-          : undefined
-        const transport = new StreamableHTTPClientTransport(new URL(config.url), {
-          requestInit: headers ? { headers } : undefined,
-        })
-        await client.connect(transport)
-        const listed = await client.listTools()
-        const tools: PiExternalTool[] = (listed.tools || []).map((tool) => {
-          // MCP 工具名可能与 Pi 内置/其它 server 冲突，加 server 前缀唯一化；
-          // 但 collaboration 的子 Agent 工具保持原名，便于模型按约定识别 delegate_*。
-          const rawName = String(tool.name)
-          const name = serverName === 'collaboration' ? rawName : `mcp__${serverName}__${rawName}`
-          const mapped: PiExternalTool = {
-            name,
-            label: rawName.replaceAll('_', ' '),
-            description: tool.description || `Proma MCP 工具 ${rawName}`,
-            promptSnippet: tool.description ? `${name}: ${String(tool.description).slice(0, 80)}` : '',
-            parameters: (tool.inputSchema && typeof tool.inputSchema === 'object'
-              ? tool.inputSchema
-              : { type: 'object', properties: {} }) as Record<string, unknown>,
-          }
-          this.toolToClient.set(name, client)
-          return mapped
-        })
-        this.connections.push({ client, tools })
-        collected.push(...tools)
-      } catch (error) {
-        console.warn(`[Proma Pi MCP 桥接] 连接 MCP Server "${serverName}" 失败:`, error instanceof Error ? error.message : error)
+function canonicalToolName(server: string, name: string): string {
+  return server === 'collaboration' ? name : `mcp__${server}__${name}`
+}
+
+export class PiMcpBridge {
+  private readonly servers = new Map<string, McpServerEntry>()
+  private readonly closing = new Set<Promise<void>>()
+  private disposed = false
+
+  /** 只更新轻量目录；删除/变更配置立即使旧工具失效，不等待连接。 */
+  configure(mcpServers: Record<string, unknown> | undefined): void {
+    if (this.disposed) throw new Error('Pi MCP 会话已关闭。')
+    const next = new Set<string>()
+    for (const [name, raw] of Object.entries(mcpServers || {})) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const config = raw as Record<string, unknown>
+      if (config.enabled === false) continue
+      if (!isLazyBuiltinMcpServerDefinition(config) && !isBuiltinMcpServerDefinition(config)
+        && !['http', 'sse', 'stdio'].includes(String(config.type))) continue
+      next.add(name)
+      const revision = configRevision(config)
+      const old = this.servers.get(name)
+      if (old?.revision === revision) {
+        old.config = config
+        continue
+      }
+      if (old) this.closeEntry(old)
+      this.servers.set(name, { config, revision, abortController: new AbortController() })
+    }
+    for (const [name, entry] of this.servers) {
+      if (next.has(name)) continue
+      this.servers.delete(name)
+      this.closeEntry(entry)
+    }
+  }
+
+  catalog(): PiMcpCatalogEntry[] {
+    return [...this.servers].map(([server, { config }]) => ({
+      server,
+      description: typeof config.description === 'string' ? config.description : `工作区 MCP 服务：${server}`,
+    }))
+  }
+
+  /** 返回当前会话已连接且配置仍有效的工具缓存快照，不触发服务加载。 */
+  discoveredTools(): Array<{ server: string; tools: PiExternalTool[] }> {
+    return [...this.servers].flatMap(([server, entry]) => entry.connection
+      ? [{
+          server,
+          tools: entry.connection.tools.map((tool) => ({
+            ...tool,
+            ...(tool.parameters ? { parameters: structuredClone(tool.parameters) } : {}),
+          })),
+        }]
+      : [])
+  }
+
+  /** 不传服务时只看目录；并发发现同一服务只进行一次初始化。 */
+  async discover(): Promise<PiMcpCatalogEntry[]>
+  async discover(server: string): Promise<PiExternalTool[]>
+  async discover(server?: string): Promise<PiMcpCatalogEntry[] | PiExternalTool[]> {
+    if (!server) return this.catalog()
+    const entry = this.servers.get(server)
+    if (!entry || this.disposed) throw new Error(`MCP 服务未启用或不属于当前会话：${server}`)
+    if (!entry.connection) {
+      entry.pending ??= this.connect(server, entry).then(async (connection) => {
+        if (this.disposed || this.servers.get(server) !== entry) {
+          await connection.client?.close().catch(() => undefined)
+          throw new Error('MCP 配置已变更或会话已关闭，请重新发现服务。')
+        }
+        entry.connection = connection
+        return connection
+      }).finally(() => { entry.pending = undefined })
+      await entry.pending
+    }
+    return entry.connection!.tools
+  }
+
+  /** 仅接受本会话已经发现的工具，返回真正参与审批的工具名和参数。 */
+  resolveToolCall(input: Record<string, unknown>): { name: string; input: Record<string, unknown>; mcpReadOnly: boolean } {
+    const call = parsePiMcpCall(input)
+    const connection = this.servers.get(call.server)?.connection
+    if (this.disposed || !connection?.originalNames.has(call.tool)) {
+      throw new Error(`工具未发现或已失效，请先发现 MCP 服务：${call.server}`)
+    }
+    const originalName = connection.originalNames.get(call.tool)
+    const builtinTool = connection.builtin?.tools.find((tool) => tool.name === originalName)
+    return {
+      name: call.tool,
+      input: call.arguments,
+      // 外部服务的 annotations 只是提示，不是宿主的只读授权。
+      mcpReadOnly: builtinTool?.annotations?.readOnlyHint === true,
+    }
+  }
+
+  async call(input: Record<string, unknown>): Promise<unknown> {
+    this.resolveToolCall(input)
+    const call = parsePiMcpCall(input)
+    const connection = this.servers.get(call.server)!.connection!
+    const name = connection.originalNames.get(call.tool)!
+    if (connection.builtin) {
+      const tool = connection.builtin.tools.find((candidate) => candidate.name === name)
+      if (!tool) throw new Error('MCP 工具定义已变更，请重新发现。')
+      return normalizePiMcpToolResult(await tool.execute(call.arguments))
+    }
+    return normalizePiMcpToolResult(await connection.client!.callTool({ name, arguments: call.arguments }))
+  }
+
+  private async connect(server: string, entry: McpServerEntry): Promise<McpServerConnection> {
+    let config = entry.config
+    if (isLazyBuiltinMcpServerDefinition(config)) config = await config.load()
+    const originalNames = new Map<string, string>()
+    const mapTool = (name: string, description: string | undefined, parameters: Record<string, unknown>): PiExternalTool => {
+      const canonical = canonicalToolName(server, name)
+      originalNames.set(canonical, name)
+      return { name: canonical, description: description || name, parameters }
+    }
+    if (isBuiltinMcpServerDefinition(config)) {
+      return {
+        builtin: config,
+        originalNames,
+        tools: config.tools.map((tool) => mapTool(tool.name, tool.description, z.toJSONSchema(tool.inputSchema, { io: 'input' }))),
       }
     }
-    this.cachedTools = collected
-    return collected
-  }
-
-  /** Pi Worker `tool.request` 的宿主处理器：把工具调用转发到对应 MCP Server。 */
-  async handleToolCall(name: string, params: Record<string, unknown>): Promise<unknown> {
-    const client = this.toolToClient.get(name)
-    if (!client) throw new Error(`未知的 Pi 外部工具：${name}`)
-    const result = await client.callTool({ name: this.originalToolName(name), arguments: params })
-    return normalizePiMcpToolResult(result)
-  }
-
-  /** 还原加前缀的工具名为 MCP Server 上的原始名。 */
-  private originalToolName(name: string): string {
-    // mcp__server__tool → tool；collaboration 工具未加前缀，直接返回
-    const match = name.match(/^mcp__[^_]+__([\s\S]+)$/)
-    return match ? match[1]! : name
-  }
-
-  /** 释放所有 MCP 连接。 */
-  async dispose(): Promise<void> {
-    for (const connection of this.connections) {
-      await connection.client.close().catch(() => undefined)
+    const client = new Client({ name: `proma-pi-${server}`, version: '1.0.0' })
+    const headers = config.headers as Record<string, string> | undefined
+    try {
+      const transport = config.type === 'stdio'
+        ? new StdioClientTransport({
+          command: String(config.command || ''),
+          args: Array.isArray(config.args) ? config.args.map(String) : [],
+          env: config.env as Record<string, string> | undefined,
+          stderr: 'ignore',
+        })
+        : config.type === 'sse'
+          ? new SSEClientTransport(new URL(String(config.url)), { requestInit: { headers } })
+          : new StreamableHTTPClientTransport(new URL(String(config.url)), { requestInit: { headers } })
+      const configuredTimeout = Number(config.startup_timeout_sec || 30) * 1_000
+      const timeout = Number.isFinite(configuredTimeout) ? Math.max(1_000, configuredTimeout) : 30_000
+      const signal = entry.abortController.signal
+      if (signal.aborted) throw new Error('MCP 配置已失效。')
+      entry.connectingClient = client
+      await client.connect(transport, { timeout, signal })
+      const tools: PiExternalTool[] = []
+      const cursors = new Set<string>()
+      let cursor: string | undefined
+      do {
+        const page = await client.listTools(cursor ? { cursor } : undefined, { timeout, signal })
+        tools.push(...page.tools.map((tool) => mapTool(tool.name, tool.description, tool.inputSchema)))
+        cursor = page.nextCursor
+        if (cursor && cursors.has(cursor)) throw new Error('MCP 工具目录返回了重复分页。')
+        if (cursor) cursors.add(cursor)
+      } while (cursor)
+      return { client, tools, originalNames }
+    } catch {
+      await client.close().catch(() => undefined)
+      // 第三方异常可能带认证 URL/headers，不直接回传给模型。
+      throw new Error(`MCP 服务初始化失败：${server}。请检查配置或连接后重试。`)
+    } finally {
+      entry.connectingClient = undefined
     }
-    this.connections.length = 0
-    this.toolToClient.clear()
-    this.cachedTools = null
+  }
+
+  private closeEntry(entry: McpServerEntry): void {
+    entry.abortController.abort()
+    const task = (async () => {
+      await entry.connectingClient?.close().catch(() => undefined)
+      await entry.pending?.catch(() => undefined)
+      await entry.connection?.client?.close().catch(() => undefined)
+    })()
+    this.closing.add(task)
+    void task.finally(() => this.closing.delete(task))
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true
+    for (const entry of this.servers.values()) this.closeEntry(entry)
+    this.servers.clear()
+    await Promise.all(this.closing)
   }
 }

@@ -71,14 +71,104 @@ describe('Browser Agent 任务生命周期', () => {
     expect(controller.getBrowserAgentTask('t2')?.status).toBe('running')
   })
 
-  test('Given 本轮存在浏览器任务 When Agent 正常结束并等待用户操作 Then 任务保持 running', () => {
+  test('Given 本轮存在浏览器任务 When Agent 正常结束 Then 任务收敛为 completed', () => {
     controller.prepareSessionBrowserTasksForRun('s1')
     controller.upsertBrowserAgentTask({ taskId: 't1', sessionId: 's1', title: 'A' })
 
     const changed = controller.completeSessionBrowserTasks('s1')
 
+    expect(changed).toBe(1)
+    expect(controller.getBrowserAgentTask('t1')?.status).toBe('completed')
+  })
+
+  test('Given 本轮浏览器任务存在真实 AskUser pending When 等待用户 Then 仅本轮任务进入 waiting_user', () => {
+    controller.upsertBrowserAgentTask({ taskId: 'old', sessionId: 's1', title: '旧任务' })
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'current', sessionId: 's1', title: '当前任务' })
+
+    const changed = controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-1')
+
+    expect(changed).toBe(1)
+    expect(controller.getBrowserAgentTask('old')?.status).toBe('paused')
+    expect(controller.getBrowserAgentTask('current')?.status).toBe('waiting_user')
+  })
+
+  test('Given 本轮没有操作浏览器 When 普通 AskUser pending Then 不把旧浏览器任务变成长等待', () => {
+    controller.upsertBrowserAgentTask({ taskId: 'old', sessionId: 's1', title: '旧任务' })
+    controller.prepareSessionBrowserTasksForRun('s1')
+
+    const waitingChanged = controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-unrelated')
+    const completedChanged = controller.completeSessionBrowserTasks('s1')
+
+    expect(waitingChanged).toBe(0)
+    expect(completedChanged).toBe(1)
+    expect(controller.getBrowserAgentTask('old')?.status).toBe('paused')
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-unrelated', true)).toBe(0)
+  })
+
+  test('Given 浏览器任务正在等待用户 When 对应 AskUser 被回答 Then 只恢复对应任务', () => {
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'current', sessionId: 's1', title: '当前任务' })
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-current')
+    controller.upsertBrowserAgentTask({ taskId: 'other', sessionId: 's2', title: '其他会话' })
+    controller.setBrowserAgentTaskStatus('other', 'waiting_user')
+
+    const changed = controller.resolveSessionBrowserTasksWaitingForUser(
+      's1',
+      'ask-current',
+      true,
+    )
+
+    expect(changed).toBe(1)
+    expect(controller.getBrowserAgentTask('current')?.status).toBe('running')
+    expect(controller.getBrowserAgentTask('other')?.status).toBe('waiting_user')
+  })
+
+  test('Given 浏览器任务正在等待用户 When 用户停止或运行异常 Then waiting_user 一并收敛', () => {
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'waiting', sessionId: 's1', title: '等待任务' })
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-stop')
+
+    const changed = controller.settleSessionBrowserTasks('s1', 'paused')
+
+    expect(changed).toBe(1)
+    expect(controller.getBrowserAgentTask('waiting')?.status).toBe('paused')
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-stop', true)).toBe(0)
+  })
+
+  test('Given 问答请求未能送达或被取消 When 移除最后一个等待请求 Then 正常收尾也不残留幽灵等待', () => {
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'waiting', sessionId: 's1', title: '等待任务' })
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-cancelled')
+
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-cancelled', false)).toBe(1)
+    controller.completeSessionBrowserTasks('s1')
+
+    expect(controller.getBrowserAgentTask('waiting')?.status).toBe('paused')
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-cancelled', true)).toBe(0)
+  })
+
+  test('Given 两个问答共同等待同一任务 When 只回答其中一个 Then 直到全部回答才恢复', () => {
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'waiting', sessionId: 's1', title: '等待任务' })
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-first')
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-second')
+
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-first', true)).toBe(0)
+    expect(controller.getBrowserAgentTask('waiting')?.status).toBe('waiting_user')
+    expect(controller.resolveSessionBrowserTasksWaitingForUser('s1', 'ask-second', true)).toBe(1)
+    expect(controller.getBrowserAgentTask('waiting')?.status).toBe('running')
+  })
+
+  test('Given 浏览器任务正在等待用户 When Agent 完成钩子被调用 Then 保持 waiting_user', () => {
+    controller.prepareSessionBrowserTasksForRun('s1')
+    controller.upsertBrowserAgentTask({ taskId: 'waiting', sessionId: 's1', title: '等待任务' })
+    controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-1')
+
+    const changed = controller.completeSessionBrowserTasks('s1')
+
     expect(changed).toBe(0)
-    expect(controller.getBrowserAgentTask('t1')?.status).toBe('running')
+    expect(controller.getBrowserAgentTask('waiting')?.status).toBe('waiting_user')
   })
 
   test('Given 上一轮任务仍为 running When 同一会话开始新一轮 Then 先保留任务等待关联性判定', () => {
@@ -189,16 +279,35 @@ describe('Browser Agent 任务生命周期', () => {
     expect(controller.getBrowserAgentTask('t1')?.status).toBe('running')
   })
 
-  test('Given 已结束任务超时 When prune Then 自动清理；running 不清理', () => {
+  test('Given 新一轮复用旧元素引用 When 点击后请求用户操作 Then 旧任务进入 waiting_user', async () => {
+    controller.upsertBrowserAgentTask({
+      taskId: 't1',
+      sessionId: 's1',
+      title: 'Example',
+      url: 'https://example.com',
+    })
+    controller.prepareSessionBrowserTasksForRun('s1')
+
+    await controller.browserAgentClick('t1', { ref: 'expired-ref' })
+    const changed = controller.markSessionBrowserTasksWaitingForUser('s1', 'ask-after-click')
+
+    expect(changed).toBe(1)
+    expect(controller.getBrowserAgentTask('t1')?.status).toBe('waiting_user')
+  })
+
+  test('Given 已结束任务超时 When prune Then 自动清理；running 和 waiting_user 不清理', () => {
     controller.upsertBrowserAgentTask({ taskId: 't1', sessionId: 's1', title: 'A' })
     controller.setBrowserAgentTaskStatus('t1', 'failed')
     controller.upsertBrowserAgentTask({ taskId: 't2', sessionId: 's1', title: 'B' })
+    controller.upsertBrowserAgentTask({ taskId: 't3', sessionId: 's1', title: 'C' })
+    controller.setBrowserAgentTaskStatus('t3', 'waiting_user')
     // 模拟 11 分钟后
     const future = Date.now() + 11 * 60 * 1000
     const removed = controller.pruneStaleBrowserAgentTasks(future)
     expect(removed).toBe(1)
     expect(controller.getBrowserAgentTask('t1')).toBeUndefined()
     expect(controller.getBrowserAgentTask('t2')?.status).toBe('running')
+    expect(controller.getBrowserAgentTask('t3')?.status).toBe('waiting_user')
   })
 
   test('Given 任务未绑定 guest When navigate Then 触发打开请求并等待绑定', async () => {
@@ -253,6 +362,53 @@ describe('Browser Agent 任务生命周期', () => {
       redirected: true,
     })
     expect(controller.getBrowserAgentTask('apple')?.url).toBe('https://appstoreconnect.apple.com/login')
+  })
+
+  test('Given 目录路径无末尾斜杠 When navigate Then 保持用户原始路径', async () => {
+    let loadedUrl = ''
+    activeWebContents = {
+      async loadURL(url) {
+        loadedUrl = url
+      },
+      getURL: () => loadedUrl,
+      getTitle: () => 'Nexus',
+      isDestroyed: () => false,
+      mainFrame: { framesInSubtree: [] },
+    }
+    controller.upsertBrowserAgentTask({ taskId: 'nexus', sessionId: 's1', title: 'Nexus' })
+    controller.bindBrowserAgentTaskGuest('nexus', 102)
+
+    const result = await controller.browserAgentNavigate(
+      'nexus',
+      'https://test-ai.xiujiadian.com/zhuxiangwei-macmini-nexus',
+    )
+
+    expect(loadedUrl).toBe('https://test-ai.xiujiadian.com/zhuxiangwei-macmini-nexus')
+    expect(result.ok).toBe(true)
+    expect(result.data).toEqual({
+      url: 'https://test-ai.xiujiadian.com/zhuxiangwei-macmini-nexus',
+      title: 'Nexus',
+    })
+  })
+
+  test('Given 荣耀 Overview 路径 When navigate Then 不追加斜杠避免路由到 notFound', async () => {
+    let loadedUrl = ''
+    activeWebContents = {
+      async loadURL(url) {
+        loadedUrl = url
+      },
+      getURL: () => loadedUrl,
+      getTitle: () => '荣耀概览',
+      isDestroyed: () => false,
+      mainFrame: { framesInSubtree: [] },
+    }
+    controller.upsertBrowserAgentTask({ taskId: 'honor', sessionId: 's1', title: '荣耀概览' })
+    controller.bindBrowserAgentTaskGuest('honor', 107)
+
+    const result = await controller.browserAgentNavigate('honor', 'https://www.honor.com/cn/Overview')
+
+    expect(loadedUrl).toBe('https://www.honor.com/cn/Overview')
+    expect(result.ok).toBe(true)
   })
 
   test('Given 登录表单位于跨域 iframe When 获取页面状态 Then 返回正文和可操作元素引用', async () => {

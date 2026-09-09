@@ -21,10 +21,11 @@ import {
   resolveCodexOAuthCredentials,
 } from '../channel-manager'
 import { buildCcbProviderEnvironment } from '../ccb-runtime/provider-environment'
-import { compactionFor } from './proma-runtime-compaction'
 import { resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
+import { buildPromaRuntimeModelRoute } from './proma-runtime-model-route'
 import { getPromaUserAgent } from '@proma/core'
 import pkg from '../../../../package.json' with { type: 'json' }
+export { buildPromaRuntimeModelRoute } from './proma-runtime-model-route'
 
 export interface RuntimeModelGatewayResolution {
   channel: Channel
@@ -51,10 +52,6 @@ function modelFor(channel: Channel, requestedModelId?: string): string {
   return first.id
 }
 
-function baseUrlFor(channel: Channel): string {
-  return channel.baseUrl.trim()
-}
-
 export async function resolvePromaRuntimeModelRoute(
   input: ResolveRuntimeModelRouteInput,
 ): Promise<RuntimeModelGatewayResolution | null> {
@@ -67,20 +64,11 @@ export async function resolvePromaRuntimeModelRoute(
   const codexCredentials = channel.provider === 'openai-codex'
     ? await resolveCodexOAuthCredentials(channel.id)
     : undefined
-  const routeRevision = `proma-channel:${channel.id}:${channel.updatedAt}:${modelId}`
-  const route: RuntimeModelRoute = {
-    routeRevision,
-    runtimeId: input.runtimeId,
-    channelId: channel.id,
+  const route = buildPromaRuntimeModelRoute({
+    channel,
     modelId,
-    provider: channel.provider,
-    baseUrl: baseUrlFor(channel),
-    apiMode: resolvePromaRuntimeApiMode(channel.provider),
-    credentialRevision: `credential:${channel.id}:${channel.updatedAt}`,
-    capabilities: input.capabilities || {},
-    source: 'proma-channel',
-    compaction: compactionFor(channel, modelId),
-  }
+    capabilities: input.capabilities,
+  })
   const providerEnvironment = buildCcbProviderEnvironment({
     provider: channel.provider,
     apiKey,

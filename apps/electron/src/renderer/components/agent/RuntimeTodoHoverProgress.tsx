@@ -140,7 +140,7 @@ export function shouldShowRuntimeTodoProgress(
     running?: boolean
     isCompacting?: boolean
     contextCompaction?: {
-      status: 'running' | 'success' | 'noop' | 'failed'
+      status: 'running' | 'success' | 'noop' | 'failed' | 'stopped'
     }
   },
   hasBlockingRequest: boolean = false,

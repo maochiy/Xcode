@@ -317,7 +317,7 @@ export async function loginNewApiWithPassword(
 
   const client = await createClient()
   const session = await client.loginWithPassword(username, input.password)
-  const tokenName = 'ccb · Proma Desktop'
+  const tokenName = 'ccb · Xcode Desktop'
   const resolvedKey = await client.getOrCreateApiKey(session, tokenName, CCB_API_KEY_MARKER)
   try {
     return await provisionChannel({

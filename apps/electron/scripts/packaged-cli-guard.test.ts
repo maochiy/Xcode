@@ -35,7 +35,7 @@ afterEach(() => {
 describe('resolvePackagedCliPath', () => {
   test('Given darwin When 解析路径 Then 指向 App Bundle Resources/bin/proma', () => {
     expect(resolvePackagedCliPath('/out/mac-arm64', 'darwin')).toBe(
-      join('/out/mac-arm64', 'Proma.app', 'Contents', 'Resources', 'bin', 'proma'),
+      join('/out/mac-arm64', 'Xcode-Desktop.app', 'Contents', 'Resources', 'bin', 'proma'),
     )
   })
 

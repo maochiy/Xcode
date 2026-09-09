@@ -1,7 +1,7 @@
 /**
- * PromaLogoSettings - Proma 品牌 Logo 下载
+ * PromaLogoSettings - Xcode 品牌 Logo 下载
  *
- * 展示多个 Proma Logo 颜色变体网格，用户可下载用作机器人头像。
+ * 展示多个 Xcode Logo 颜色变体网格，用户可下载用作机器人头像。
  */
 
 import * as React from 'react'
@@ -51,27 +51,27 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
   // 基础色系
   {
     id: 'black',
-    name: '经典黑',
-    description: '黑色背景，适合浅色界面',
+    name: '石墨黑',
+    description: 'Xcode 默认品牌色，圆润交叉 X',
     src: promaBlackLogo,
     resourcePath: 'proma-logos/proma-black.png',
-    previewBg: 'bg-neutral-900',
+    previewBg: 'bg-[#2D2E2B]',
   },
   {
     id: 'white',
-    name: '纯白版',
-    description: '白色背景，适合深色界面',
+    name: '米白版',
+    description: '米白背景，石墨色标志',
     src: promaWhiteLogo,
     resourcePath: 'proma-logos/proma-white.png',
-    previewBg: 'bg-white',
+    previewBg: 'bg-[#F0EEE7]',
   },
   {
     id: 'blue',
-    name: '品牌蓝',
-    description: '深蓝背景，适合正式场合',
+    name: '雾蓝',
+    description: '低饱和雾蓝，可选配色',
     src: promaBlueLogo,
     resourcePath: 'proma-logos/proma-blue.png',
-    previewBg: 'bg-blue-900',
+    previewBg: 'bg-[#687D90]',
   },
   {
     id: 'purple',
@@ -84,10 +84,10 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
   {
     id: 'gradient',
     name: '渐变版',
-    description: '蓝紫渐变背景',
+    description: '石墨灰柔和渐变背景',
     src: promaGradientLogo,
     resourcePath: 'proma-logos/proma-gradient.png',
-    previewBg: 'bg-gradient-to-br from-blue-600 to-purple-600',
+    previewBg: 'bg-gradient-to-br from-[#2D2E2B] to-[#797B70]',
   },
   {
     id: 'transparent',
@@ -100,11 +100,11 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
   // 潘通年度色
   {
     id: 'coral',
-    name: '珊瑚橘',
-    description: 'Pantone 2019 Living Coral',
+    name: '玫瑰粉',
+    description: '明快玫瑰粉，个性配色',
     src: promaCoralLogo,
     resourcePath: 'proma-logos/proma-coral.png',
-    previewBg: 'bg-[#FF6F61]',
+    previewBg: 'bg-[#F4729C]',
   },
   {
     id: 'veri-peri',
@@ -141,11 +141,11 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
   // 科技风格
   {
     id: '8bit',
-    name: '8bit 像素风',
-    description: '复古像素游戏风格',
+    name: '暖灰',
+    description: '柔和暖灰，圆润线条',
     src: proma8bitLogo,
     resourcePath: 'proma-logos/proma-8bit.png',
-    previewBg: 'bg-[#1a1a2e]',
+    previewBg: 'bg-[#8A8174]',
   },
   {
     id: 'cyberpunk',
@@ -172,7 +172,7 @@ function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
     try {
       const saved = await window.electronAPI.saveResourceFileAs(
         logo.resourcePath,
-        `proma-${logo.id}.png`,
+        `xcodes-${logo.id}.png`,
       )
       if (saved) {
         toast.success(`${logo.name} 已保存`)
@@ -219,7 +219,7 @@ export function PromaLogoSettings(): React.ReactElement {
     <>
       <SettingsSection
         title="品牌 Logo"
-        description="下载 Proma Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
+        description="下载 Xcode Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
       >
         <div className="grid grid-cols-3 gap-4">
           {LOGO_VARIANTS.map((logo) => (

@@ -4,7 +4,7 @@
  * 支持三种内容块类型：
  * - text: 通过 MessageResponse 渲染 Markdown
  * - tool_use: 语义化短语行（如 "读取 foo.ts 第 10-60 行"），展开显示结构化结果
- * - thinking: 固定高度常显的 Cursor 风格思考流
+ * - thinking: 按时间顺序显示的轻量可展开思考行
  */
 
 import * as React from 'react'
@@ -13,7 +13,8 @@ import {
   XCircle,
   Bot,
 } from 'lucide-react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { createTimelineExpansionAtom } from '@/atoms/agent-timeline-atoms'
 import {
   agentChildDelegationSessionsAtomFamily,
   agentRuntimeExecutionNodeByToolUseIdAtomFamily,
@@ -31,7 +32,7 @@ import {
   type SessionExecutionNode,
 } from '@/lib/session-execution-nodes'
 import { MessageResponse } from '@/components/ai-elements/message'
-import { getToolIcon, extractFilePath } from './tool-utils'
+import { getToolIcon, extractFilePath, normalizeToolPresentation } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
@@ -48,7 +49,7 @@ import {
   getAgentTurnStatusLabel,
   resolveRunningTurnStatus,
 } from '@/lib/agent-turn-status'
-import { ThinkingStreamPanel } from './ThinkingStreamPanel'
+import { ThinkingActivity } from './AgentActivityTimeline'
 import { useSmoothStream } from '@proma/ui'
 import type {
   SDKContentBlock,
@@ -230,7 +231,9 @@ function ToolUseBlock(props: ToolUseBlockProps): React.ReactElement {
   if (COLLABORATION_DELEGATION_TOOLS.has(props.block.name)) {
     return <CollaborationToolUseBlock {...props} />
   }
-  return <RegularToolUseBlock {...props} />
+  // 只规范展示参数，原生消息及工具关联 ID 保持不变。
+  const presentation = normalizeToolPresentation(props.block.name, props.block.input)
+  return <RegularToolUseBlock {...props} block={{ ...props.block, ...presentation }} />
 }
 
 /** Proma collaboration 委派工具块：仅订阅父会话下的 child delegation sessions。 */
@@ -246,7 +249,11 @@ function CollaborationToolUseBlock({
   activityRunning,
   priorActivityNodes,
 }: ToolUseBlockProps): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(false)
+  const [manualExpanded, setExpanded] = useAtom(React.useMemo(
+    () => createTimelineExpansionAtom(`${sessionId ?? ''}/tool-result/${block.id}`),
+    [sessionId, block.id],
+  ))
+  const expanded = manualExpanded ?? false
   // 委派节点只依赖子会话元数据；不订阅整图/全局 sessions，避免大会话重渲染。
   const childSessions = useAtomValue(agentChildDelegationSessionsAtomFamily(sessionId ?? ''))
   const openSidePanelTab = useSetAtom(openAgentSidePanelTabAtom)
@@ -315,13 +322,13 @@ function CollaborationToolUseBlock({
         aria-expanded={canToggle ? expanded : undefined}
         onClick={() => {
           if (!canToggle) return
-          setExpanded((previous) => !previous)
+          setExpanded(!expanded)
         }}
       >
         {leadingModel ? (
           <AgentModelLogo model={leadingModel} />
         ) : isActualError ? (
-          <XCircle className="size-3.5 shrink-0 text-destructive/70" />
+          <XCircle className="size-3.5 shrink-0 text-destructive/70 dark:text-red-400" />
         ) : isCancelled ? (
           <XCircle className="size-3.5 shrink-0 text-muted-foreground/45" />
         ) : (
@@ -437,7 +444,11 @@ function RegularToolUseBlock({
   activityRunning,
   priorActivityNodes,
 }: ToolUseBlockProps): React.ReactElement {
-  const [expanded, setExpanded] = React.useState(false)
+  const [manualExpanded, setExpanded] = useAtom(React.useMemo(
+    () => createTimelineExpansionAtom(`${sessionId ?? ''}/tool-result/${block.id}`),
+    [sessionId, block.id],
+  ))
+  const expanded = manualExpanded ?? false
   const openSidePanelTab = useSetAtom(openAgentSidePanelTabAtom)
   // 仅订阅本 tool 对应 runtime 节点；无匹配节点时保持 undefined，图更新也不会误伤重渲染。
   const runtimeNode = useAtomValue(
@@ -541,13 +552,13 @@ function RegularToolUseBlock({
           disabled={!canToggleHistory}
           aria-expanded={canToggleHistory ? expanded : undefined}
           onClick={() => {
-            if (canToggleHistory) setExpanded((previous) => !previous)
+            if (canToggleHistory) setExpanded(!expanded)
           }}
         >
           {creationRunning && leadingModel ? (
             <AgentModelLogo model={leadingModel} />
           ) : isActualError ? (
-            <XCircle className="size-3.5 shrink-0 text-destructive/70" />
+            <XCircle className="size-3.5 shrink-0 text-destructive/70 dark:text-red-400" />
           ) : isCancelled ? (
             <XCircle className="size-3.5 shrink-0 text-muted-foreground/45" />
           ) : (
@@ -646,7 +657,7 @@ function RegularToolUseBlock({
         {leadingModel ? (
           <AgentModelLogo model={leadingModel} />
         ) : isActualError ? (
-          <XCircle className="size-3.5 text-destructive/70 shrink-0" />
+          <XCircle className="size-3.5 text-destructive/70 dark:text-red-400 shrink-0" />
         ) : isCancelled ? (
           <XCircle className="size-3.5 text-muted-foreground/45 shrink-0" />
         ) : null}
@@ -759,11 +770,12 @@ function ThinkingBlock({
   running = false,
 }: ThinkingBlockProps): React.ReactElement {
   return (
-    <ThinkingStreamPanel
-      content={block.thinking ?? ''}
-      running={running}
-      className={dimmed ? 'opacity-80' : undefined}
-    />
+    <div className={dimmed ? 'opacity-80' : undefined}>
+      <ThinkingActivity
+        content={block.thinking ?? ''}
+        running={running}
+      />
+    </div>
   )
 }
 
@@ -786,7 +798,7 @@ function ProcessTextActivity({
   // text 无思考图标。
   return (
     <div
-      className="agent-activity-fade-in py-0.5 text-muted-foreground"
+      className="agent-activity-fade-in py-0.5 text-foreground"
       data-agent-activity="process-text"
     >
       <div className={cn(
@@ -799,7 +811,7 @@ function ProcessTextActivity({
           isStreaming={running}
           basePath={basePath}
           basePaths={basePaths}
-          className="text-[14px] leading-6 text-muted-foreground prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+          className="text-[14px] leading-6 text-foreground prose-p:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
         />
       </div>
     </div>

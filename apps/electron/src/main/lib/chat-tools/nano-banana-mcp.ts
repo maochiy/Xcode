@@ -77,7 +77,14 @@ type McpContent = McpTextContent | McpImageContent
 
 interface McpToolResult {
   content: McpContent[]
+  isError?: boolean
   [key: string]: unknown
+}
+
+interface NanoBananaRuntimeConfig {
+  apiKey: string
+  baseUrl: string
+  model: string
 }
 
 // ===== Gemini API 调用 =====
@@ -189,12 +196,9 @@ function buildGeminiRequest(
 async function callGeminiAndBuildResult(
   prompt: string,
   sessionId: string,
+  runtimeConfig: NanoBananaRuntimeConfig,
   options: { aspectRatio?: string; imageSize?: string; referenceImagePaths?: string[]; cwd?: string; numberOfImages?: number },
 ): Promise<McpToolResult> {
-  const credentials = getToolCredentials('nano-banana')
-  const baseUrl = credentials.baseUrl?.trim() || DEFAULT_BASE_URL
-  const model = credentials.model?.trim() || DEFAULT_MODEL
-
   // 获取会话历史
   const history = sessionHistory.get(sessionId) ?? []
 
@@ -212,9 +216,9 @@ async function callGeminiAndBuildResult(
     imageSize: options.imageSize,
     numberOfImages: options.numberOfImages,
   })
-  const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${credentials.apiKey}`
+  const url = `${runtimeConfig.baseUrl}/v1beta/models/${runtimeConfig.model}:generateContent?key=${runtimeConfig.apiKey}`
 
-  console.log(`[Nano Banana MCP] 调用 Gemini API: model=${model}, prompt="${prompt.slice(0, 50)}..."`)
+  console.log(`[Nano Banana MCP] 调用 Gemini API: model=${runtimeConfig.model}, prompt="${prompt.slice(0, 50)}..."`)
 
   const response = await fetch(url, {
     method: 'POST',
@@ -319,6 +323,28 @@ async function callGeminiAndBuildResult(
   return { content: mcpContent }
 }
 
+function getNanoBananaRuntimeConfig(): NanoBananaRuntimeConfig | undefined {
+  const toolState = getToolState('nano-banana')
+  const credentials = getToolCredentials('nano-banana')
+  const apiKey = credentials.apiKey?.trim()
+  if (!toolState.enabled || !apiKey) return undefined
+  return {
+    apiKey,
+    baseUrl: credentials.baseUrl?.trim() || DEFAULT_BASE_URL,
+    model: credentials.model?.trim() || DEFAULT_MODEL,
+  }
+}
+
+function nanoBananaUnavailableResult(): McpToolResult {
+  return {
+    isError: true,
+    content: [{
+      type: 'text',
+      text: 'Nano Banana 当前已禁用或未配置 API Key，请先在 Chat 工具设置中启用并完成配置。',
+    }],
+  }
+}
+
 // ===== MCP Server 注入 =====
 
 /**
@@ -333,9 +359,7 @@ export async function injectNanoBananaMcpServer(
   agentCwd?: string,
 ): Promise<void> {
   // 检查工具是否启用且有凭据
-  const toolState = getToolState('nano-banana')
-  const credentials = getToolCredentials('nano-banana')
-  if (!toolState.enabled || !credentials.apiKey) return
+  if (!getNanoBananaRuntimeConfig()) return
 
   const { z } = await import('zod')
   const serverName = getBuiltinMcpName('nano-banana')
@@ -355,8 +379,10 @@ export async function injectNanoBananaMcpServer(
           numberOfImages: z.number().int().min(1).max(4).optional().describe('Number of images to generate (1-4, default 1)'),
         },
         async (args) => {
+          const runtimeConfig = getNanoBananaRuntimeConfig()
+          if (!runtimeConfig) return nanoBananaUnavailableResult()
           try {
-            return await callGeminiAndBuildResult(args.prompt, sessionId, {
+            return await callGeminiAndBuildResult(args.prompt, sessionId, runtimeConfig, {
               aspectRatio: args.aspectRatio,
               imageSize: args.imageSize,
               referenceImagePaths: args.referenceImagePaths,

@@ -10,7 +10,7 @@ import {
 } from './ThinkingStreamPanel'
 
 describe('ThinkingStreamPanel Cursor 风格思考流', () => {
-  test('Given 正在生成的多行思考内容 When 渲染 Then 固定视口顶部使用白色渐隐遮罩', () => {
+  test('Given 正在生成的多行思考内容 When 渲染 Then 固定视口顶部使用内容区同色遮罩', () => {
     const html = renderToStaticMarkup(
       <ThinkingStreamPanel
         content={'第一行思考。\n第二行思考。\n最新一行思考。'}
@@ -32,6 +32,8 @@ describe('ThinkingStreamPanel Cursor 风格思考流', () => {
     expect(html).not.toContain('agent-thinking-stream-text-shadow')
     expect(html).not.toContain('agent-thinking-stream-history')
     expect(html).not.toContain('agent-thinking-stream-latest')
+    expect(html).not.toContain('bg-background/90')
+    expect(html).not.toContain('backdrop-blur-sm')
     expect(html).toContain('h-36')
     expect(html).toContain('overflow-y-scroll')
     expect(html).toContain('[scrollbar-gutter:stable]')
@@ -57,7 +59,7 @@ describe('ThinkingStreamPanel Cursor 风格思考流', () => {
     expect(html).not.toContain('agent-thinking-stream-text-shadow')
   })
 
-  test('Given 思考内容白色遮罩 When 读取主题样式 Then 以百分之七十五透明遮罩覆盖整个视口', () => {
+  test('Given 思考内容遮罩 When 读取主题样式 Then 以百分之七十五的内容区背景色覆盖整个视口', () => {
     const css = readFileSync(
       new URL('../../styles/globals.css', import.meta.url),
       'utf8',
@@ -67,7 +69,8 @@ describe('ThinkingStreamPanel Cursor 风格思考流', () => {
     expect(rule).toContain('position: absolute')
     expect(rule).toContain('inset: 0')
     expect(rule).not.toContain('height: 2.25rem')
-    expect(rule).toContain('hsl(var(--background) / 0.75)')
+    expect(rule).toContain('hsl(var(--content-area) / 0.75)')
+    expect(rule).not.toContain('hsl(var(--background) / 0.75)')
     expect(rule).not.toContain('linear-gradient')
     expect(rule).toContain('pointer-events: none')
     expect(rule).toContain('opacity: 0')
@@ -92,6 +95,17 @@ describe('ThinkingStreamPanel Cursor 风格思考流', () => {
     const html = renderToStaticMarkup(
       <ThinkingStreamPanel
         content="已经完成分析。"
+        running={false}
+      />,
+    )
+
+    expect(html).toBe('')
+  })
+
+  test('Given 用户停止或立即发送 When 渲染 Then 立即隐藏之前的思考内容', () => {
+    const html = renderToStaticMarkup(
+      <ThinkingStreamPanel
+        content="停止前已经产生的思考。"
         running={false}
       />,
     )

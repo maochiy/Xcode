@@ -7,7 +7,13 @@
  */
 
 import * as React from 'react'
-import { Globe, PauseCircle, XCircle, CheckCircle2 } from 'lucide-react'
+import {
+  CheckCircle2,
+  Globe,
+  MessageCircleQuestion,
+  PauseCircle,
+  XCircle,
+} from 'lucide-react'
 import type { BrowserAgentTask } from '@proma/shared'
 import { useBrowserAgentTasks } from '@/hooks/useBrowserAgentTasks'
 
@@ -20,6 +26,8 @@ function BrowserTaskStatusIcon({ status }: Pick<BrowserAgentTask, 'status'>): Re
   switch (status) {
     case 'running':
       return null
+    case 'waiting_user':
+      return <MessageCircleQuestion className="size-3.5 text-amber-500" aria-label="等待用户操作" />
     case 'paused':
       return <PauseCircle className="size-3.5 text-amber-500" aria-label="已暂停" />
     case 'completed':

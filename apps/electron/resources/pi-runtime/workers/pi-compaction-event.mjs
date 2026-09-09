@@ -8,6 +8,20 @@ function nonEmptyString(value) {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+/** Pi 用异常表示没有可压缩区间；这不是模型失败，也不能写入压缩边界。 */
+export function piCompactionNoopReason(error) {
+  const message = String(error?.message ?? error ?? '')
+    .replace(/^(?:Auto-compaction failed|Compaction failed):\s*/i, '')
+    .trim();
+  if (message === 'Nothing to compact (session too small)') {
+    return '当前上下文较少，没有需要压缩的历史内容。';
+  }
+  if (message === 'Already compacted') {
+    return '上下文已经压缩，暂时没有新增的可压缩内容。';
+  }
+  return undefined;
+}
+
 function compactionTrigger(event) {
   if (event.reason === 'manual' || event.reason === 'threshold' || event.reason === 'overflow') {
     return event.reason;
@@ -48,6 +62,13 @@ export function normalizePiCompactionEvent(event) {
     ?? finiteNonNegativeNumber(event.usage?.totalTokens);
   const summary = nonEmptyString(result.summary);
   const error = nonEmptyString(event.errorMessage) ?? nonEmptyString(event.error);
+  const noopReason = event.aborted === true ? undefined : piCompactionNoopReason(error);
+  if (noopReason) {
+    return {
+      type: 'context.compaction.completed',
+      payload: { trigger, noop: true, reason: noopReason, originalContextPreserved: true },
+    };
+  }
   const failed = event.aborted === true || error != null;
 
   return {
@@ -58,6 +79,7 @@ export function normalizePiCompactionEvent(event) {
       ...(tokensAfterEstimate != null ? { tokensAfterEstimate } : {}),
       ...(summary != null ? { summary } : {}),
       ...(failed ? {
+        ...(event.aborted === true ? { aborted: true } : {}),
         error: error || '上下文压缩已中止。',
         originalContextPreserved: true,
       } : {}),

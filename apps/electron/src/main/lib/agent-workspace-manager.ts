@@ -592,6 +592,48 @@ export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   return scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
 }
 
+const SKILL_FRONTMATTER_READ_CHUNK = 4096
+const SKILL_FRONTMATTER_MAX_BYTES = 1024 * 1024
+
+/**
+ * 只读取 SKILL.md 的 YAML frontmatter，避免仅构建 Skill Catalog 时反复加载正文。
+ * 明确选择 Skill 后的正文加载由 agent-skill-activation.ts 单独完成。
+ */
+function readSkillFrontmatter(skillMdPath: string): string {
+  const fd = openSync(skillMdPath, 'r')
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+
+  try {
+    while (totalBytes < SKILL_FRONTMATTER_MAX_BYTES) {
+      const buffer = Buffer.alloc(
+        Math.min(SKILL_FRONTMATTER_READ_CHUNK, SKILL_FRONTMATTER_MAX_BYTES - totalBytes),
+      )
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, totalBytes)
+      if (bytesRead === 0) break
+
+      chunks.push(buffer.subarray(0, bytesRead))
+      totalBytes += bytesRead
+      const content = Buffer.concat(chunks).toString('utf-8')
+      const normalized = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content
+
+      if (!/^---\s*(?:\r?\n|$)/.test(normalized)) {
+        return content
+      }
+
+      const frontmatter = normalized.match(/^---\s*\r?\n[\s\S]*?\r?\n---(?:\s*\r?\n|\s*$)/)
+      if (frontmatter) return frontmatter[0]
+    }
+  } finally {
+    closeSync(fd)
+  }
+
+  if (totalBytes >= SKILL_FRONTMATTER_MAX_BYTES) {
+    throw new Error(`Skill frontmatter 超过 ${SKILL_FRONTMATTER_MAX_BYTES} 字节`)
+  }
+  return Buffer.concat(chunks).toString('utf-8')
+}
+
 /** 解析 SKILL.md 的 YAML frontmatter，支持单行值、block scalar（`|` / `>`）和多行缩进 */
 function parseSkillFrontmatter(content: string, slug: string, enabled: boolean): SkillMeta {
   const meta: SkillMeta = { slug, name: slug, enabled }
@@ -718,7 +760,7 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
       if (!existsSync(skillMdPath)) continue
 
       try {
-        const content = readFileSync(skillMdPath, 'utf-8')
+        const content = readSkillFrontmatter(skillMdPath)
         const meta = parseSkillFrontmatter(content, entry.name, enabled)
 
         // 如果是导入的 Skill，读取来源信息并检测更新

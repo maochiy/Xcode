@@ -13,6 +13,10 @@ export interface AgentQueuedMessage {
   id: string
   text: string
   createdAt: number
+  /** 已交给 Runtime，等待原生 user 消息确认实际进入上下文。 */
+  deliveryState?: 'sending'
+  /** 原生未消费的失败/取消指令，必须由用户重试，避免停止后自动重启。 */
+  requiresManualSend?: boolean
   quotedSelection?: QuotedSelection
   fileReferenceBlock?: string
   attachments?: AgentQueuedAttachment[]
@@ -23,6 +27,8 @@ export interface AgentMessageRuntimeState {
   streaming: boolean
   stopping: boolean
   messagesRefreshing: boolean
+  /** 会话级立即发送尚未消费，跨 Tab 重建也必须继续等待。 */
+  immediateSending?: boolean
 }
 
 /**
@@ -34,17 +40,21 @@ export interface AgentMessageRuntimeState {
 export function shouldDeferAgentMessage(
   state: AgentMessageRuntimeState,
 ): boolean {
-  return state.streaming
-    || state.stopping
-    || state.messagesRefreshing
+  // 活跃 run 直接接收 steering；同步历史或已有指令待消费不能阻塞下一条指令。
+  // 停止收尾例外：必须等 Runtime 退出，不能在取消过程中把它重新唤醒。
+  return state.stopping || (!state.streaming && (
+    state.messagesRefreshing || state.immediateSending === true
+  ))
 }
 
 export interface AgentQueuedAutoSendState {
+  headRequiresManualSend?: boolean
   queueLength: number
   canSendNow: boolean
   streaming: boolean
   stopping: boolean
   messagesRefreshing: boolean
+  immediateSending?: boolean
 }
 
 /** 只有旧 Runtime 已完成收尾且消息投影稳定后，才自动启动队首消息。 */
@@ -52,10 +62,36 @@ export function canAutoSendQueuedAgentMessage(
   state: AgentQueuedAutoSendState,
 ): boolean {
   return state.queueLength > 0
+    && !state.headRequiresManualSend
     && state.canSendNow
     && !state.streaming
     && !state.stopping
     && !state.messagesRefreshing
+    && !state.immediateSending
+}
+
+export type AgentQueuedDeliveryPlan =
+  | { kind: 'runtime-queue'; interrupt: boolean }
+  | { kind: 'new-run'; interrupt: false }
+
+/**
+ * 决定普通追加/自动队列消息如何交付。
+ *
+ * 普通追加可由 Runtime 原生 steering 消费，不停止或重启 run。
+ * 后台等待态复用现有 Runtime 但不打断，完全空闲时才新建 run。
+ * 用户显式“立即发送”始终优先使用 Pi steering，不中断当前工具。
+ */
+export function resolveAgentQueuedDeliveryPlan(input: {
+  streaming: boolean
+  backgroundWaiting: boolean
+}): AgentQueuedDeliveryPlan {
+  if (input.streaming) {
+    return { kind: 'runtime-queue', interrupt: true }
+  }
+  if (input.backgroundWaiting) {
+    return { kind: 'runtime-queue', interrupt: false }
+  }
+  return { kind: 'new-run', interrupt: false }
 }
 
 export function createAgentQueuedMessage(
@@ -86,6 +122,33 @@ export function removeQueuedMessage(
   messageId: string,
 ): AgentQueuedMessage[] {
   return queue.filter((item) => item.id !== messageId)
+}
+
+export function markQueuedMessageSending(
+  queue: AgentQueuedMessage[],
+  messageId: string,
+): AgentQueuedMessage[] {
+  let changed = false
+  const next = queue.map((item) => {
+    if (item.id !== messageId || item.deliveryState === 'sending') return item
+    changed = true
+    return { ...item, deliveryState: 'sending' as const }
+  })
+  return changed ? next : queue
+}
+
+export function restoreQueuedMessagePending(
+  queue: AgentQueuedMessage[],
+  messageId: string,
+): AgentQueuedMessage[] {
+  let changed = false
+  const next = queue.map((item) => {
+    if (item.id !== messageId || item.deliveryState !== 'sending') return item
+    changed = true
+    const { deliveryState: _deliveryState, ...pending } = item
+    return pending
+  })
+  return changed ? next : queue
 }
 
 export function restoreQueuedMessageToFront(

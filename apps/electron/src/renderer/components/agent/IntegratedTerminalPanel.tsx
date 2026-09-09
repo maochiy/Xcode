@@ -13,7 +13,11 @@ import {
 } from '@/atoms/agent-atoms'
 import { resolvedThemeAtom, themeStyleAtom } from '@/atoms/theme'
 import { Button } from '@/components/ui/button'
-import { IntegratedTerminalLayoutCoordinator } from '@/lib/integrated-terminal-layout'
+import {
+  INTEGRATED_TERMINAL_FOCUS_RETRY_DELAYS_MS,
+  IntegratedTerminalLayoutCoordinator,
+  isIntegratedTerminalFocused,
+} from '@/lib/integrated-terminal-layout'
 import { IntegratedTerminalOutputQueue } from '@/lib/integrated-terminal-output-queue'
 
 interface IntegratedTerminalPanelProps {
@@ -211,7 +215,7 @@ function IntegratedTerminalContent({
 
     let disposed = false
     let resizeFrame = 0
-    let focusRetryTimer: number | null = null
+    const focusRetryTimers: number[] = []
     let replayReady = false
     const layoutCoordinator = new IntegratedTerminalLayoutCoordinator()
     const pendingData: Array<{ data: string; sequence: number }> = []
@@ -230,6 +234,32 @@ function IntegratedTerminalContent({
     const focusTerminal = (): void => {
       if (isTerminalReady()) terminal.focus()
     }
+    const claimTerminalFocus = (): void => {
+      if (!isTerminalReady() || isIntegratedTerminalFocused(host)) return
+      const active = document.activeElement
+      if (active instanceof HTMLElement && !host.contains(active)) {
+        const shouldReclaim = Boolean(
+          active.closest(
+            '[data-codex-terminal], [data-side-panel-add-menu], [data-radix-popper-content-wrapper], .ProseMirror, [contenteditable="true"]',
+          ),
+        )
+        if (!shouldReclaim) {
+          // 用户已经点到文件树等其它控件，不要再把焦点抢回来。
+          return
+        }
+      }
+      focusTerminal()
+    }
+    const clearFocusRetries = (): void => {
+      for (const timer of focusRetryTimers) window.clearTimeout(timer)
+      focusRetryTimers.length = 0
+    }
+    const scheduleFocusRetries = (): void => {
+      clearFocusRetries()
+      for (const delay of INTEGRATED_TERMINAL_FOCUS_RETRY_DELAYS_MS) {
+        focusRetryTimers.push(window.setTimeout(claimTerminalFocus, delay))
+      }
+    }
     const writeData = (data: string, sequence: number): void => {
       if (sequence <= attachedSequenceRef.current) return
       attachedSequenceRef.current = sequence
@@ -239,7 +269,7 @@ function IntegratedTerminalContent({
       if (!isTerminalReady()) return
       const layoutAction = layoutCoordinator.update(host.clientWidth, host.clientHeight)
       if (!layoutAction.shouldFit) return
-      if (layoutAction.shouldFocus) focusTerminal()
+      if (layoutAction.shouldFocus) scheduleFocusRetries()
       fitAddon.fit()
       void window.electronAPI.resizeIntegratedTerminal(
         terminalSessionId,
@@ -320,10 +350,10 @@ function IntegratedTerminalContent({
           pendingData.length = 0
           outputQueue.flush()
           scheduleFit()
-          // Radix Popover 关闭和 Windows app-region hitmask 都可能在异步挂载后抢回焦点。
-          // 先立即聚焦，再跨过一次 UI 收尾周期重试，保证打开终端后可以直接输入。
-          focusTerminal()
-          focusRetryTimer = window.setTimeout(focusTerminal, 80)
+          // 打开瞬间会被这些收尾动作抢走焦点：Radix Popover 关闭、composer 100ms autofocus、
+          // 面板 300ms 宽度动画、以及 xterm fit() 重建 helper textarea。
+          // 在布局稳定前按阶梯重试，直到焦点真正落到 xterm。
+          scheduleFocusRetries()
         })
       })
       .catch((cause: unknown) => {
@@ -333,7 +363,7 @@ function IntegratedTerminalContent({
     return () => {
       disposed = true
       cancelAnimationFrame(resizeFrame)
-      if (focusRetryTimer !== null) window.clearTimeout(focusRetryTimer)
+      clearFocusRetries()
       outputQueue.dispose()
       unsubscribe()
       resizeObserver.disconnect()

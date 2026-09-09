@@ -41,12 +41,14 @@ interface UserMessageData {
 }
 
 interface StickyUserMessageProps {
+  variant?: 'chat' | 'agent'
   userMessages: UserMessageData[]
   contentOffsetX?: number
 }
 
 export function StickyUserMessage({
   userMessages,
+  variant = 'chat',
   contentOffsetX = 0,
 }: StickyUserMessageProps): React.ReactElement {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
@@ -153,20 +155,29 @@ export function StickyUserMessage({
     >
       {/* 复用 ConversationContent(px-8) + Message(px-2.5) 的 padding 链，保证与内容区等宽 */}
       <div
-        className="mx-8 px-2.5 pt-2"
+        className={variant === 'agent' ? 'mx-auto w-full max-w-[800px] px-5 pt-2 sm:px-8' : 'mx-8 px-2.5 pt-2'}
         style={{ transform: contentOffsetX ? `translateX(${contentOffsetX}px)` : undefined }}
       >
         <div
-          className="sticky-user-banner ml-[46px] rounded-xl bg-[hsl(var(--input-surface))] shadow-sm cursor-pointer hover:bg-accent/50 transition-colors"
+          className={cn('sticky-user-banner rounded-xl bg-[hsl(var(--input-surface))] shadow-sm cursor-pointer hover:bg-accent/50 transition-colors', variant === 'chat' && 'ml-[46px]')}
+          role="button"
+          tabIndex={0}
+          aria-label="回到原始用户消息"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              scrollToOriginal()
+            }
+          }}
           onClick={scrollToOriginal}
         >
           <div className="px-3.5 py-2.5">
             {/* 头部：头像 + 用户名 + 提示 */}
-            <div className="flex items-center gap-2 mb-1">
+            {variant === 'chat' && <div className="flex items-center gap-2 mb-1">
               <UserAvatar avatar={userProfile.avatar} size={18} />
               <span className="text-xs font-medium text-foreground/60">{userProfile.userName}</span>
               <ChevronUp className="size-3 text-muted-foreground ml-auto" />
-            </div>
+            </div>}
 
             {/* 文本内容：最多两行，支持 Markdown 渲染 */}
             {stickyMessage?.text && (

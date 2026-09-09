@@ -5,6 +5,7 @@ import { listAgentSessions } from './lib/agent-session-manager'
 import { listAgentWorkspaces } from './lib/agent-workspace-manager'
 import { isAgentSessionActive } from './lib/agent-service'
 import { createTrayMenuModel, type TrayRecentSessionItem } from './lib/tray-menu-model'
+import { APP_DISPLAY_NAME } from './lib/app-branding'
 
 let tray: Tray | null = null
 
@@ -101,12 +102,12 @@ function buildTrayMenu(actions: TrayActions): Menu {
     },
     { type: 'separator' },
     {
-      label: '打开 Proma',
+      label: `打开 ${APP_DISPLAY_NAME}`,
       click: () => actions.showMainWindow(),
     },
     { type: 'separator' },
     {
-      label: '退出 Proma',
+      label: `退出 ${APP_DISPLAY_NAME}`,
       click: () => {
         app.quit()
       },
@@ -148,7 +149,7 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
     tray = new Tray(image)
 
     // 设置 tooltip
-    tray.setToolTip('Proma')
+    tray.setToolTip(APP_DISPLAY_NAME)
 
     updateTrayMenu(actions)
 

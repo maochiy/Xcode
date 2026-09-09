@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@proma/shared'
 import {
+  getNativeAgentSteeringTurn,
   getAssistantModelMessageId,
   hasUnpersistedLiveAssistantNarrative,
   hasUnpersistedPausedAgentContent,
   markPausedAgentMessages,
   mergeAgentLiveMessages,
+  mergeAgentLiveMessagesAtQueuedUserBoundary,
   mergePersistedAndLiveMessages,
   preservePausedAgentContent,
   upsertAgentLiveMessage,
@@ -30,6 +32,28 @@ function assistant(
 }
 
 describe('Agent 实时消息合并', () => {
+  test('Given 当前轮包含工具结果 user When 停止 Then 保留并冻结结果之前的 assistant 工具调用', () => {
+    const input: SDKMessage = {
+      type: 'user', uuid: 'input', message: { content: [{ type: 'text', text: '处理文件' }] },
+    }
+    const call = assistant('call', 'call', { type: 'tool_use', id: 't1', name: 'Read', input: {} }, true)
+    const result: SDKMessage = {
+      type: 'user', uuid: 'result',
+      message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '已读取' }] },
+    }
+    const paused = markPausedAgentMessages([input, call, result])
+    expect(paused).toHaveLength(3)
+    expect(paused[1]).toMatchObject({ _promaPausedByUser: true, _partial: false })
+    expect(paused[2]).toBe(result)
+    const nextInput: SDKMessage = {
+      type: 'user', uuid: 'next', message: { content: [{ type: 'text', text: '下一轮' }] },
+    }
+    const nextAssistant = assistant('next-answer', 'next-answer', { type: 'text', text: '继续' }, true)
+    const nextPaused = markPausedAgentMessages([...paused, nextInput, nextAssistant])
+    expect(nextPaused[1]).toBe(paused[1])
+    expect(nextPaused[4]).toMatchObject({ _promaPausedByUser: true, _partial: false })
+  })
+
   test('Given 一帧内收到多条不同消息 When 批量刷新 Then 保持 IPC 到达顺序且不丢消息', () => {
     const merged = mergeAgentLiveMessages(
       [],
@@ -208,6 +232,82 @@ describe('Agent 实时消息合并', () => {
     expect(result).toBe(before)
   })
 
+  test('Given Pi 原生消息内容与时间相同但 UUID 不同 When 合并 Then 按到达顺序全部保留', () => {
+    const first = {
+      type: 'user',
+      uuid: 'native-user-1',
+      message: { content: [{ type: 'text', text: '继续' }] },
+      _createdAt: 100,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const second = {
+      ...first,
+      uuid: 'native-user-2',
+    } as SDKMessage
+
+    const merged = mergeAgentLiveMessages([], [first, second])
+
+    expect(merged.map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['native-user-1', 'native-user-2'])
+  })
+
+  test('Given Pi 重复推送相同原生 UUID When 合并 Then 仅按 UUID 去重', () => {
+    const first = assistant('native-assistant', 'native-model-message', {
+      type: 'text',
+      text: '第一份快照',
+    })
+    ;(first as Record<string, unknown>)._promaNativeMessage = true
+    const duplicate = assistant('native-assistant', 'native-model-message', {
+      type: 'text',
+      text: '重复终态',
+    })
+    ;(duplicate as Record<string, unknown>)._promaNativeMessage = true
+
+    const merged = mergeAgentLiveMessages([], [first, duplicate])
+
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toBe(first)
+  })
+
+  test('Given Pi 原生 partial 已因用户停止被冻结 When 同 UUID final 到达 Then 原位替换为最终快照', () => {
+    const partial = assistant('native-assistant', 'native-model-message', {
+      type: 'text',
+      text: '停止前的部分内容',
+    }, true)
+    ;(partial as Record<string, unknown>)._promaNativeMessage = true
+    const [frozen] = markPausedAgentMessages([partial])
+    const finalMessage = assistant('native-assistant', 'native-model-message', {
+      type: 'text',
+      text: 'Runtime 最终内容',
+    })
+    ;(finalMessage as Record<string, unknown>)._promaNativeMessage = true
+
+    const merged = upsertAgentLiveMessage([frozen!], finalMessage)
+
+    expect(merged).toEqual([finalMessage])
+    expect((merged[0] as Record<string, unknown>)._promaPausedByUser).toBeUndefined()
+    expect(JSON.stringify(merged[0])).toContain('Runtime 最终内容')
+    expect(JSON.stringify(merged[0])).not.toContain('停止前的部分内容')
+  })
+
+  test('Given 乐观 user 已占据原位置 When 同 UUID 原生 user 到达 Then 原位替换且不新增气泡', () => {
+    const optimistic = {
+      type: 'user',
+      uuid: 'user-stable',
+      message: { content: [{ type: 'text', text: '继续' }] },
+      _createdAt: 100,
+    } as SDKMessage
+    const native = {
+      ...optimistic,
+      _createdAt: 150,
+      _promaNativeMessage: true,
+    } as SDKMessage
+
+    const merged = upsertAgentLiveMessage([optimistic], native)
+
+    expect(merged).toEqual([native])
+  })
+
   test('Given assistant partial 已在新用户消息之前 When final 快照补到 Then 保留原始时间位置', () => {
     const partial = assistant('partial', 'msg-order', {
       type: 'text',
@@ -329,6 +429,98 @@ describe('mergePersistedAndLiveMessages 暂停后继续对话顺序', () => {
     expect(merged).toHaveLength(1)
   })
 
+  test('Given Pi 原生 transcript 的时间戳不单调 When 合并 Then 保持持久化流顺序不重排', () => {
+    const user = {
+      type: 'user',
+      uuid: 'native-user',
+      message: { content: [{ type: 'text', text: '继续' }] },
+      _createdAt: 300,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const assistantMessage = {
+      type: 'assistant',
+      uuid: 'native-assistant',
+      message: {
+        id: 'native-model-message',
+        content: [{ type: 'text', text: '已继续' }],
+      },
+      _createdAt: 200,
+      _promaNativeMessage: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages(
+      [user, assistantMessage],
+      [],
+    )
+
+    expect(merged.map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['native-user', 'native-assistant'])
+  })
+
+  test('Given 持久化原生前缀与实时原生后缀 When 合并 Then 按来源流顺序直接拼接', () => {
+    const persistedUser = {
+      type: 'user',
+      uuid: 'native-user',
+      message: { content: [{ type: 'text', text: '开始' }] },
+      _createdAt: 300,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const liveAssistant = {
+      type: 'assistant',
+      uuid: 'native-assistant',
+      message: {
+        id: 'native-model-message',
+        content: [{ type: 'text', text: '处理中' }],
+      },
+      _createdAt: 200,
+      _promaNativeMessage: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages(
+      [persistedUser],
+      [liveAssistant],
+    )
+
+    expect(merged.map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['native-user', 'native-assistant'])
+  })
+
+  test('Given 单一来源重复出现原生 UUID When 合并 Then 不按内容判断且仅保留第一条流事件', () => {
+    const first = {
+      type: 'user',
+      uuid: 'native-user',
+      message: { content: [{ type: 'text', text: '第一份内容' }] },
+      _createdAt: 100,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const duplicate = {
+      ...first,
+      message: { content: [{ type: 'text', text: '重复事件内容' }] },
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([], [first, duplicate])
+
+    expect(merged).toEqual([first])
+  })
+
+  test('Given 持久化乐观 user 与实时原生 user UUID 相同 When 合并 Then 使用原生消息替换且位置不变', () => {
+    const optimistic = {
+      type: 'user',
+      uuid: 'stable-user',
+      message: { content: [{ type: 'text', text: '继续' }] },
+      _createdAt: 100,
+    } as SDKMessage
+    const native = {
+      ...optimistic,
+      _createdAt: 150,
+      _promaNativeMessage: true,
+    } as SDKMessage
+
+    const merged = mergePersistedAndLiveMessages([optimistic], [native])
+
+    expect(merged).toEqual([native])
+  })
+
   test('Given renderer 乐观 user 与主进程落盘 user 没有 uuid 但共享 startedAt When 合并 Then 用户消息只显示一次', () => {
     const optimistic = {
       type: 'user',
@@ -434,6 +626,93 @@ describe('mergePersistedAndLiveMessages 暂停后继续对话顺序', () => {
     expect(merged).toHaveLength(1)
     expect(JSON.stringify(merged[0])).toContain('先检查项目')
     expect(JSON.stringify(merged[0])).not.toContain('"uuid":"partial-old"')
+  })
+})
+
+describe('Pi 原生 steering 消费确认', () => {
+  test('Given 原生 user 已实际进入上下文 When 读取 Turn 开始信号 Then 使用稳定 UUID 与实际消费时间', () => {
+    const message = {
+      type: 'user',
+      uuid: 'queued-message-id',
+      message: { content: [{ type: 'text', text: '立即处理' }] },
+      _createdAt: 250,
+      _promaNativeMessage: true,
+      _promaQueuedDuringStreaming: true,
+    } as SDKMessage
+
+    expect(getNativeAgentSteeringTurn(message)).toEqual({
+      uuid: 'queued-message-id',
+      createdAt: 250,
+    })
+  })
+
+  test('Given user 仍是 Renderer 乐观消息 When 读取 Turn 开始信号 Then 不提前切换可见回合', () => {
+    const optimistic = {
+      type: 'user',
+      uuid: 'queued-message-id',
+      message: { content: [{ type: 'text', text: '立即处理' }] },
+      _createdAt: 200,
+      _promaQueuedDuringStreaming: true,
+    } as SDKMessage
+
+    expect(getNativeAgentSteeringTurn(optimistic)).toBeUndefined()
+  })
+
+  test('Given 普通 Pi 原生 assistant 流事件 When 判断是否为 queued user 消费确认 Then 不触发同步刷新信号', () => {
+    const message = assistant('native-assistant', 'native-model-message', {
+      type: 'text',
+      text: '流式回答',
+    }, true)
+    ;(message as Record<string, unknown>)._promaNativeMessage = true
+
+    expect(getNativeAgentSteeringTurn(message)).toBeUndefined()
+  })
+
+  test('Given queued user 前仍有待合帧 assistant 与 tool final When 同步消费边界 Then 先保留完整前缀再追加 user', () => {
+    const currentUser = {
+      type: 'user',
+      uuid: 'current-user',
+      message: { content: [{ type: 'text', text: '先执行旧任务' }] },
+      _createdAt: 100,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const assistantFinal = assistant('assistant-final', 'old-assistant', {
+      type: 'tool_use',
+      id: 'tool-1',
+      name: 'read',
+      input: { path: 'src/index.ts' },
+    })
+    ;(assistantFinal as Record<string, unknown>)._promaNativeMessage = true
+    const toolFinal = {
+      type: 'user',
+      uuid: 'tool-final',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'tool-1',
+          content: [{ type: 'text', text: '读取完成' }],
+        }],
+      },
+      _createdAt: 200,
+      _promaNativeMessage: true,
+    } as SDKMessage
+    const queuedUser = {
+      type: 'user',
+      uuid: 'queued-user',
+      message: { content: [{ type: 'text', text: '现在处理新问题' }] },
+      _createdAt: 300,
+      _promaNativeMessage: true,
+      _promaQueuedDuringStreaming: true,
+    } as SDKMessage
+
+    const merged = mergeAgentLiveMessagesAtQueuedUserBoundary(
+      [currentUser],
+      [assistantFinal, toolFinal],
+      queuedUser,
+    )
+
+    expect(merged.map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['current-user', 'assistant-final', 'tool-final', 'queued-user'])
   })
 })
 

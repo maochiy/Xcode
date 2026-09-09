@@ -9,6 +9,7 @@ export const BROWSER_IPC_CHANNELS = {
   ANNOTATION_CREATED: 'proma:browser-annotation-created',
   ERROR: 'proma:browser-error',
   SET_MODE: 'proma-browser:set-mode',
+  SET_SCROLLBAR_VISIBLE: 'proma-browser:set-scrollbar-visible',
 } as const
 
 export type BrowserAnnotationMode = 'none' | 'element' | 'region'
@@ -70,7 +71,12 @@ export const BROWSER_AGENT_IPC_CHANNELS = {
  * 浏览器任务状态。
  * 任务状态完全由系统根据 Agent 轮次管理，模型不直接修改。
  */
-export type BrowserAgentTaskStatus = 'running' | 'paused' | 'completed' | 'failed'
+export type BrowserAgentTaskStatus =
+  | 'running'
+  | 'waiting_user'
+  | 'paused'
+  | 'completed'
+  | 'failed'
 
 /** 一个 Agent 驱动的浏览器任务。 */
 export interface BrowserAgentTask {
@@ -84,7 +90,7 @@ export interface BrowserAgentTask {
   url: string
   /** 当前页面标题 */
   pageTitle?: string
-  /** 任务状态；悬浮面板只展示 running，历史任务可在浏览器任务列表中查看。 */
+  /** 任务状态；悬浮面板展示 running / waiting_user，历史任务可在浏览器任务列表中查看。 */
   status: BrowserAgentTaskStatus
   /** 关联的 webview guest id（未绑定时为空，例如任务刚创建尚未导航） */
   guestId?: number

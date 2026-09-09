@@ -322,7 +322,7 @@ export function SessionFloatingPanel({
 
   const visibleBrowserTasks = React.useMemo(
     () => browserAgentTasks
-      .filter((task) => task.status === 'running')
+      .filter((task) => task.status === 'running' || task.status === 'waiting_user')
       .slice(0, 4),
     [browserAgentTasks],
   )
@@ -539,9 +539,19 @@ export function SessionFloatingPanel({
                   data-browser-task-entry={task.taskId}
                 >
                   <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="agent-status-shimmer min-w-0 flex-1 truncate text-xs">
+                  <span className={cn(
+                    'min-w-0 flex-1 truncate text-xs',
+                    task.status === 'running'
+                      ? 'agent-status-shimmer'
+                      : 'text-foreground',
+                  )}>
                     {task.title}
                   </span>
+                  {task.status === 'waiting_user' && (
+                    <span className="shrink-0 text-[10px] text-amber-600 dark:text-amber-400">
+                      等待操作
+                    </span>
+                  )}
                 </button>
               ))}
             </div>

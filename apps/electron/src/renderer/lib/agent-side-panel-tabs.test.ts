@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createStore } from 'jotai'
 import {
-  AGENT_SIDE_PANEL_MAX_WIDTH,
+  AGENT_SIDE_PANEL_DEFAULT_WIDTH,
   agentDiffPanelTabAtom,
   agentFocusedExecutionNodeAtom,
   agentSidePanelLauncherAtom,
@@ -190,14 +190,14 @@ describe('右侧动态功能区状态', () => {
     expect(store.get(agentDiffPanelTabAtom).get(SESSION_ID)).toBe('workspace')
   })
 
-  test('Given 功能区已收起且宽度较小 When 再次打开 Then 使用允许的最大宽度', () => {
+  test('Given 功能区已收起且宽度较小 When 再次打开 Then 使用默认宽度', () => {
     const store = createStore()
     store.set(agentSidePanelWidthAtom, 360)
     store.set(closeAgentSidePanelAtom, SESSION_ID)
 
     store.set(openAgentSidePanelLauncherAtom, SESSION_ID)
 
-    expect(store.get(agentSidePanelWidthAtom)).toBe(AGENT_SIDE_PANEL_MAX_WIDTH)
+    expect(store.get(agentSidePanelWidthAtom)).toBe(AGENT_SIDE_PANEL_DEFAULT_WIDTH)
   })
 
   test('Given 当前会话没有 Tabs When 打开功能区 Then 仍显示默认启动页', () => {

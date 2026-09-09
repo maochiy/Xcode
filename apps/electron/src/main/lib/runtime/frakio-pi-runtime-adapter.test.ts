@@ -92,6 +92,25 @@ describe('Proma Pi 协议来源', () => {
 })
 
 describe('Proma Pi 压缩事件转换', () => {
+  test.each(['manual', 'threshold'])('Given %s 无需压缩 When 转换 Then 保留 noop 状态且不创建压缩边界或零 usage', (trigger) => {
+    const message = compactionSystemMessage('session-1', 'context.compaction.completed', {
+      trigger, noop: true, reason: '当前上下文较少，没有需要压缩的历史内容。',
+    })
+    expect(message).toMatchObject({
+      type: 'system', subtype: 'status', compact_result: 'noop',
+      compact_error: '当前上下文较少，没有需要压缩的历史内容。',
+    })
+    expect(message).not.toHaveProperty('compact_metadata')
+    expect(message).not.toHaveProperty('compactionEstimatedTokensAfter')
+  })
+  test.each(['manual', 'threshold'])('Given %s 压缩被用户停止 When 转换终态 Then 持久化 stopped 而非 failed 或成功边界', (trigger) => {
+    expect(compactionSystemMessage('session-1', 'context.compaction.failed', {
+      trigger, aborted: true, error: '用户已取消',
+    })).toMatchObject({
+      type: 'system', subtype: 'status', compact_result: 'stopped', compact_error: '用户已取消',
+    })
+  })
+
   test('Given Pi 开始压缩 When 收到 compaction.started Then 转换为 compacting system 消息', () => {
     const message = compactionSystemMessage('session-1', 'context.compaction.started', {
       trigger: 'threshold',
@@ -455,11 +474,7 @@ describe('Proma Pi Worker 身份', () => {
   test('Given Context Packet 带有用户名 When 构建 Worker 身份 Then 模型可见名称固定为 Proma', () => {
     const identity = piWorkerSessionIdentity({
       contextPacket: { packetId: 'context-1' },
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: '你运行在 Proma 桌面应用中。',
-      },
+      systemPrompt: '你运行在 Proma 桌面应用中。',
     })
     expect(identity.profileSnapshot).toMatchObject({
       name: 'Proma',

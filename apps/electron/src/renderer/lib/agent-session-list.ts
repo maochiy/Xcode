@@ -2,6 +2,10 @@ import type {
   AgentDelegationStatus,
   AgentSessionMeta,
 } from '@proma/shared'
+import {
+  normalizeAgentSessionRuntime,
+  normalizeAgentSessionRuntimes,
+} from './pi-runtime-selection'
 
 interface AgentSessionTreeLike {
   session: Pick<AgentSessionMeta, 'id'>
@@ -12,7 +16,8 @@ interface AgentSessionTreeLike {
 export function sortAgentSessionsByUpdatedAtDesc(
   sessions: readonly AgentSessionMeta[],
 ): AgentSessionMeta[] {
-  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  return normalizeAgentSessionRuntimes(sessions)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 /** 用后端返回的新元数据替换本地条目，并按最近更新时间重新排序。 */
@@ -43,7 +48,10 @@ export function upsertAgentSession(
     ? { ...existing, ...incoming }
     : incoming
   const others = sessions.filter((session) => session.id !== incoming.id)
-  return sortAgentSessionsByUpdatedAtDesc([merged, ...others])
+  return sortAgentSessionsByUpdatedAtDesc([
+    normalizeAgentSessionRuntime(merged),
+    ...others,
+  ])
 }
 
 /**

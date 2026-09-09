@@ -28,8 +28,16 @@ import { getRuntimeSessionsDir } from '../config-paths'
 import type { RuntimeModelRoute } from '@proma/shared'
 import { getRuntimeConfig, isPackagedElectronApp } from './runtime-registry'
 import { PiMcpBridge } from './pi-mcp-bridge'
+import {
+  formatPiMcpDiscoveryResult,
+  PI_MCP_CALL_TOOL,
+  PI_MCP_DISCOVER_TOOL,
+  PI_MCP_GATEWAY_TOOLS,
+} from './pi-mcp-tools'
 import { canonicalToolError, handlePromaCanonicalTool, isPromaCanonicalTool } from './proma-canonical-tools'
 import { isPromaProviderType, resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
+import type { PiAgentQueryOptions as PiRuntimeQueryOptions } from './pi-query-options'
+import { piApprovedToolInput, piPermissionTool } from './pi-tool-permission'
 
 interface MessageQueue {
   iterable: AsyncIterable<SDKMessage>
@@ -46,7 +54,7 @@ interface FrakioPiEvent {
 interface FrakioPiBridge {
   on(event: 'event' | 'exit' | 'sessionDisposed', callback: (value: unknown) => void): void
   startRun(payload: Record<string, unknown>): Promise<Record<string, unknown>>
-  steer(sessionId: string, message: string): Promise<unknown>
+  steer(sessionId: string, message: string, options?: Record<string, unknown>): Promise<unknown>
   cancel(sessionId: string): Promise<unknown>
   compact(sessionId: string, input?: Record<string, unknown>): Promise<unknown>
   disposeSession(sessionId: string): Promise<unknown>
@@ -55,13 +63,6 @@ interface FrakioPiBridge {
 
 interface FrakioPiBridgeModule {
   createPiBridgePool(input: Record<string, unknown>): FrakioPiBridge
-}
-
-interface PiRuntimeQueryOptions extends AgentQueryInput {
-  env?: Record<string, string | undefined>
-  effortLevel?: string
-  systemPrompt?: string | { type: 'preset'; preset: 'claude_code'; append?: string }
-  onSessionId?: (sessionId: string) => void
 }
 
 interface PiRunState {
@@ -73,6 +74,11 @@ interface PiRunState {
   stream: PiAssistantMessageStream
   settled: boolean
   lastUsage?: PiUsageSnapshot
+  nativeTranscript?: boolean
+  canUseTool?: PiRuntimeQueryOptions['canUseTool']
+  abortController?: AbortController
+  consumedUserIds?: Set<string>
+  onNativeMessage?: PiRuntimeQueryOptions['onNativeMessage']
 }
 
 function compactTrigger(value: unknown): 'manual' | 'auto' {
@@ -178,6 +184,17 @@ export function compactionSystemMessage(
       compactPreTokens: usageNumber(payload, 'tokensBefore', 'preTokens'),
     } as SDKMessage
   }
+  if (eventType === 'context.compaction.completed' && payload.noop === true) {
+    return {
+      type: 'system',
+      subtype: 'status',
+      session_id: sessionId,
+      uuid: randomUUID(),
+      compactTrigger: compactTrigger(payload.trigger),
+      compact_result: 'noop',
+      compact_error: String(payload.reason || '当前上下文无需压缩'),
+    } as SDKMessage
+  }
   const failed = eventType === 'context.compaction.failed'
   const estimatedTokensAfter = usageNumber(payload, 'tokensAfterEstimate', 'estimatedTokensAfter', 'postTokens')
   const summary = typeof payload.summary === 'string' && payload.summary.trim()
@@ -193,7 +210,10 @@ export function compactionSystemMessage(
     ...(estimatedTokensAfter != null ? { compactionEstimatedTokensAfter: estimatedTokensAfter } : {}),
     ...(summary ? { summary } : {}),
     ...(failed
-      ? { compact_result: 'failed', compact_error: String(payload.error || '上下文压缩失败') }
+      ? {
+          compact_result: payload.aborted === true ? 'stopped' : 'failed',
+          compact_error: String(payload.error || (payload.aborted === true ? '上下文压缩已停止' : '上下文压缩失败')),
+        }
       : { compact_metadata: {
           trigger: compactTrigger(payload.trigger),
           pre_tokens: usageNumber(payload, 'tokensBefore', 'preTokens'),
@@ -601,7 +621,7 @@ export function resolvePiModelRoute(
 }
 
 function systemPromptText(value: PiRuntimeQueryOptions['systemPrompt']): string {
-  return typeof value === 'string' ? value : value?.append || ''
+  return value || ''
 }
 
 export interface PiWorkerSessionIdentity {
@@ -771,19 +791,29 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
   private readonly mcpBridges = new Map<string, PiMcpBridge>()
   private readonly runStates = new Map<string, PiRunState>()
   private readonly sessionRuns = new Map<string, string>()
+  private readonly startingSessions = new Set<string>()
   private readonly workspaceSlugs = new Map<string, string>()
   private runGeneration = 0
   /** sessionId → Pi 原生 sessionFile 路径，用于跨轮/跨进程恢复 Pi 会话历史 */
   private readonly sessionFiles = new Map<string, string>()
   private sessionFilesLoaded = false
+  private readonly pendingUsers = new Map<string, {
+    sessionId: string
+    promise: Promise<void>
+    resolve(): void
+    reject(error: Error): void
+  }>()
 
   query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
     const queue = createQueue()
+    this.startingSessions.add(input.sessionId)
     void this.run(input as PiRuntimeQueryOptions, queue)
     return queue.iterable
   }
 
   async abort(sessionId: string): Promise<void> {
+    const runId = this.sessionRuns.get(sessionId)
+    if (runId) this.runStates.get(runId)?.abortController?.abort()
     await this.bridgePool?.cancel(sessionId)
   }
 
@@ -811,10 +841,37 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
   async sendQueuedMessage(
     sessionId: string,
     message: SDKUserMessageInput,
-    _options?: SendQueuedMessageOptions,
+    options?: SendQueuedMessageOptions,
   ): Promise<void> {
     if (!this.bridgePool) throw new Error('Proma Pi Session 尚未打开。')
-    await this.bridgePool.steer(sessionId, message.message.content)
+    const runId = this.sessionRuns.get(sessionId)
+    if (!runId && this.startingSessions.has(sessionId)) throw new Error('Pi session is not active.')
+    if (!runId || !this.runStates.has(runId)) throw new Error('Pi turn already finished.')
+    const uuid = message.uuid || randomUUID()
+    if (this.runStates.get(runId)?.consumedUserIds?.has(uuid)) return
+    const key = `${sessionId}:${uuid}`
+    const existing = this.pendingUsers.get(key)
+    if (existing) return existing.promise
+    const pending = Promise.withResolvers<void>()
+    // 原生消费/结束事件可能先于 IPC 的入队响应到达；提前挂接拒绝处理，
+    // 返回的原始 Promise 仍把失败交给调用者恢复队列。
+    void pending.promise.catch(() => {})
+    this.pendingUsers.set(key, { ...pending, sessionId })
+    // Worker 在原生 message_end(user) 确认消费后才完成投递；停止/失败时
+    // 未被消费的消息返回 UI 队列，不能将“入队成功”误报成“已发送”。
+    try {
+      await this.bridgePool.steer(sessionId, message.message.content, {
+        uuid,
+        rawText: message.rawText ?? message.message.content,
+        interrupt: options?.interrupt ?? true,
+      })
+      options?.onAccepted?.()
+    } catch (error) {
+      this.pendingUsers.delete(key)
+      pending.reject(error)
+      throw error
+    }
+    return pending.promise
   }
 
   async compactSession(input: AgentRuntimeSessionOperationInput, instructions?: string): Promise<void> {
@@ -874,18 +931,30 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
   ): void {
     if (state.settled) return
     state.settled = true
+    state.abortController?.abort()
     const finalReasoning = typeof payload.reasoning === 'string' ? payload.reasoning : ''
     const finalOutput = typeof payload.output === 'string' ? payload.output : ''
-    for (const correction of state.stream.reconcileCumulativeReasoning(finalReasoning)) {
-      state.queue.push(correction)
+    if (!state.nativeTranscript) {
+      for (const correction of state.stream.reconcileCumulativeReasoning(finalReasoning)) {
+        state.queue.push(correction)
+      }
+      for (const correction of state.stream.reconcileCumulativeText(finalOutput)) {
+        state.queue.push(correction)
+      }
+      const finalAssistant = state.stream.flush(state.lastUsage)
+      if (finalAssistant) state.queue.push(finalAssistant)
     }
-    for (const correction of state.stream.reconcileCumulativeText(finalOutput)) {
-      state.queue.push(correction)
+    const result = resultMessage(state.sessionId, finalOutput || state.stream.output, error, state.lastUsage)
+    if (state.nativeTranscript) {
+      Object.assign(result, { _promaNativeMessage: true, _createdAt: Date.now(), uuid: randomUUID() })
     }
-    const finalAssistant = state.stream.flush(state.lastUsage)
-    if (finalAssistant) state.queue.push(finalAssistant)
-    state.queue.push(resultMessage(state.sessionId, state.stream.output, error, state.lastUsage))
+    state.queue.push(result)
     state.queue.finish()
+    for (const [key, pending] of this.pendingUsers) {
+      if (pending.sessionId !== state.sessionId) continue
+      this.pendingUsers.delete(key)
+      pending.reject(new Error(error || 'Pi 运行已结束，队列消息尚未消费。'))
+    }
     this.runStates.delete(state.runId)
     if (this.sessionRuns.get(state.sessionId) === state.runId) {
       this.sessionRuns.delete(state.sessionId)
@@ -899,7 +968,41 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
   ): Promise<unknown> {
     const sessionId = String(context.sessionId || '')
     if (!sessionId) throw new Error('Pi 工具请求缺少 sessionId，已拒绝执行以避免串会话。')
-    if (isPromaCanonicalTool(name)) {
+    const runId = this.sessionRuns.get(sessionId)
+    const run = runId ? this.runStates.get(runId) : undefined
+    if (!run || run.settled || String(context.runId || '') !== run.runId) {
+      throw new Error('Pi 工具请求不属于当前活跃运行，已拒绝执行。')
+    }
+    if (name === 'proma_permission_check') {
+      if (!run.canUseTool || !run.abortController) {
+        return { behavior: 'deny', message: 'Pi 运行未配置工具权限处理器。' }
+      }
+      const toolName = String(params.toolName || '')
+      const toolInput = params.input && typeof params.input === 'object'
+        ? params.input as Record<string, unknown>
+        : {}
+      // 通用调用入口不能成为权限后门：审批真实工具及其参数，而不是网关名称。
+      const permissionTool = toolName === PI_MCP_CALL_TOOL
+        ? this.mcpBridges.get(sessionId)?.resolveToolCall(toolInput)
+        : piPermissionTool(toolName, toolInput)
+      if (!permissionTool) throw new Error('MCP 会话不可用，请重新发现目标工具。')
+      const result = await run.canUseTool(permissionTool.name, permissionTool.input, {
+        signal: run.abortController.signal,
+        toolUseID: String(params.toolCallId || ''),
+        mcpReadOnly: 'mcpReadOnly' in permissionTool && permissionTool.mcpReadOnly === true,
+      })
+      return result.behavior === 'allow' && result.updatedInput
+        ? {
+            ...result,
+            updatedInput: toolName === PI_MCP_CALL_TOOL
+              ? { ...toolInput, arguments: result.updatedInput }
+              : ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'].includes(toolName)
+                ? piApprovedToolInput(result.updatedInput)
+                : result.updatedInput,
+          }
+        : result
+    }
+    if (isPromaCanonicalTool(name) && name !== PI_MCP_DISCOVER_TOOL && name !== PI_MCP_CALL_TOOL) {
       try {
         return await handlePromaCanonicalTool(name, params, {
           sessionId,
@@ -911,7 +1014,14 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
     }
     const mcpBridge = this.mcpBridges.get(sessionId)
     if (!mcpBridge) throw new Error(`Pi Session ${sessionId} 的 MCP 工具上下文不可用。`)
-    return mcpBridge.handleToolCall(name, params)
+    if (name === PI_MCP_DISCOVER_TOOL) {
+      if (params.server !== undefined && typeof params.server !== 'string') throw new Error('MCP server 必须为目录中的服务名称。')
+      const server = params.server as string | undefined
+      if (!server) return mcpBridge.discover()
+      return formatPiMcpDiscoveryResult(server, await mcpBridge.discover(server))
+    }
+    if (name === PI_MCP_CALL_TOOL) return mcpBridge.call(params)
+    throw new Error(`未注册的 Pi 外部工具：${name}。请通过 MCP 发现和调用入口使用。`)
   }
 
   private handleBridgeEvent(value: unknown): void {
@@ -921,15 +1031,40 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
     if (!state || state.settled) return
     const event = message.event
     const payload = event?.payload || {}
-    if (event?.type === 'context.compaction.started') {
+    if (event?.type === 'transcript.message') {
+      const nativeMessage = payload.message
+      if (!nativeMessage || typeof nativeMessage !== 'object') return
+      const record = nativeMessage as Record<string, unknown>
+      if (record._promaNativeMessage !== true || typeof record.uuid !== 'string') return
+      if (record.session_id !== state.sessionId) return
+      if (!['assistant', 'user'].includes(String(record.type))) return
+      state.nativeTranscript = true
+      if (record._partial !== true) {
+        try {
+          state.onNativeMessage?.(nativeMessage as SDKMessage)
+        } catch (error) {
+          void this.bridgePool?.cancel(state.sessionId).catch(() => {})
+          this.finishRun(state, `Pi 消息保存失败：${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+      }
+      state.queue.push(nativeMessage as SDKMessage)
+      if (record._promaQueuedDuringStreaming === true) {
+        state.consumedUserIds ??= new Set()
+        state.consumedUserIds.add(record.uuid)
+        const key = `${state.sessionId}:${record.uuid}`
+        this.pendingUsers.get(key)?.resolve()
+        this.pendingUsers.delete(key)
+      }
+    } else if (event?.type === 'context.compaction.started') {
       const finalAssistant = state.stream.flush(state.lastUsage)
       if (finalAssistant) state.queue.push(finalAssistant)
-      state.queue.push(compactionSystemMessage(state.sessionId, event.type, payload))
+      this.publishNativeStatus(state, compactionSystemMessage(state.sessionId, event.type, payload))
     } else if (
       event?.type === 'context.compaction.completed'
       || event?.type === 'context.compaction.failed'
     ) {
-      state.queue.push(compactionSystemMessage(state.sessionId, event.type, payload))
+      this.publishNativeStatus(state, compactionSystemMessage(state.sessionId, event.type, payload))
     } else if (event?.type === 'context.usage.updated') {
       state.lastUsage = piUsageSnapshot(payload)
       state.queue.push(usageSystemMessage(state.sessionId, payload))
@@ -991,6 +1126,18 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       || event?.type === 'run.cancelled'
     ) {
       this.finishRun(state, String(payload.error || ''), payload)
+    }
+  }
+
+  private publishNativeStatus(state: PiRunState, message: SDKMessage): void {
+    Object.assign(message, { _promaNativeMessage: true, _createdAt: Date.now() })
+    try {
+      // 压缩状态也按 Worker 事件顺序落盘，不能延迟到最终回答之后。
+      state.onNativeMessage?.(message)
+      state.queue.push(message)
+    } catch (error) {
+      void this.bridgePool?.cancel(state.sessionId).catch(() => {})
+      this.finishRun(state, `Pi 消息保存失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -1061,13 +1208,10 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         ...(env.PROMA_RUNTIME_API_KEY ? { PROMA_RUNTIME_API_KEY: env.PROMA_RUNTIME_API_KEY } : {}),
         ...(env.FRAKIO_RUNTIME_TOKEN ? { FRAKIO_RUNTIME_TOKEN: env.FRAKIO_RUNTIME_TOKEN } : {}),
       })
-      // 连接 Proma 编译好的 MCP HTTP 端点（含 collaboration 子 Agent 工具），
-      // 列出工具并经 toolHandler 桥接给 Pi Worker。
-      // 同一 session 跨轮复用 PiMcpBridge：Proma 内置 MCP HTTP Host 是 stateful
-      // 单会话端点，重复 connect 会被 server 以 "Server already initialized" 拒绝，
-      // 导致第二轮及以后 externalTools 为空、browser 等 MCP 工具全部 not found。
+      // 首轮只配置服务目录；真正发现服务时才初始化，普通聊天不等待任何 MCP。
       const mcpBridge = this.mcpBridges.get(input.sessionId) || new PiMcpBridge()
-      const externalTools = await mcpBridge.collectExternalTools(input.mcpServers).catch(() => [])
+      mcpBridge.configure(input.mcpServers)
+      const externalTools = PI_MCP_GATEWAY_TOOLS
       const workspaceSlug = input.contextPacket?.workspace?.slug || ''
       this.workspaceSlugs.set(input.sessionId, workspaceSlug)
       const existingRunId = this.sessionRuns.get(input.sessionId)
@@ -1085,7 +1229,11 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         input.modelRoute?.compaction,
         input.sessionId,
       )
-      if (compactionConfigMessage) queue.push(compactionConfigMessage)
+      if (compactionConfigMessage) {
+        Object.assign(compactionConfigMessage, { _promaNativeMessage: true, _createdAt: Date.now() })
+        input.onNativeMessage?.(compactionConfigMessage)
+        queue.push(compactionConfigMessage)
+      }
       const piSessionRoot = join(getRuntimeSessionsDir(), 'pi', 'sessions')
       const piAgentDir = join(getRuntimeSessionsDir(), 'pi', 'agents', input.sessionId)
       const token = ++this.runGeneration
@@ -1097,9 +1245,13 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         queue,
         stream: createPiAssistantMessageStream(input.sessionId),
         settled: false,
+        canUseTool: input.canUseTool,
+        abortController: new AbortController(),
+        onNativeMessage: input.onNativeMessage,
       }
       this.runStates.set(runState.runId, runState)
       this.sessionRuns.set(input.sessionId, runState.runId)
+      this.startingSessions.delete(input.sessionId)
       const accepted = await bridge.startRun({
         runId: runState.runId,
         sessionId: input.sessionId,
@@ -1127,9 +1279,12 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         // 避免每轮把两份完整上下文再次写进 Pi 原生会话。
         prompt: input.compactRequest ? '' : input.prompt,
         compactOnly: input.compactRequest === true,
+        historyMessages: input.historyMessages,
         thinkingLevel: input.effortLevel || 'medium',
         // Proma MCP 工具（collaboration 子 Agent delegate_* 等）暴露给 Pi Worker。
         externalTools,
+        mcpCatalog: mcpBridge.catalog(),
+        mcpDiscoveredTools: mcpBridge.discoveredTools(),
         workspaceId: workspaceSlug,
         ...piWorkerSessionIdentity(input),
         model: {
@@ -1182,7 +1337,10 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
           this.finishRun(runState, failure.message)
         }
       }
-      input.onSessionId?.(String(accepted.sessionId || input.sessionId))
+      input.onModelResolved?.(input.modelRoute?.modelId || input.model || '')
+      const contextWindow = input.modelRoute?.compaction?.contextWindow
+      if (contextWindow) input.onContextWindow?.(contextWindow)
+      input.onSessionId?.(String(accepted.nativeSessionId || accepted.sessionId || input.sessionId))
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error))
       const runId = this.sessionRuns.get(input.sessionId)
@@ -1193,6 +1351,8 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         queue.push(resultMessage(input.sessionId, '', failure.message))
         queue.finish()
       }
+    } finally {
+      this.startingSessions.delete(input.sessionId)
     }
   }
 }

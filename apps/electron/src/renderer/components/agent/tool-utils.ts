@@ -41,6 +41,50 @@ import {
   Zap,
 } from 'lucide-react'
 
+interface ToolPresentation {
+  name: string
+  input: Record<string, unknown>
+}
+
+const PI_TOOL_PRESENTATION_NAMES: Record<string, string> = {
+  read: 'Read',
+  bash: 'Bash',
+  edit: 'Edit',
+  write: 'Write',
+  grep: 'Grep',
+  find: 'Glob',
+}
+
+/**
+ * 将 Pi 原生工具名和参数转换为现有 UI 可识别的展示形式。
+ * 仅影响展示副本，不修改原始工具消息或实际 toolId。
+ */
+export function normalizeToolPresentation(
+  name: string,
+  input: Record<string, unknown>
+): ToolPresentation {
+  const normalizedInput = { ...input }
+
+  if (name === 'read' || name === 'edit' || name === 'write') {
+    if (input.path !== undefined) {
+      normalizedInput.file_path = input.path
+    }
+  }
+  if (name === 'edit') {
+    if (input.oldText !== undefined) {
+      normalizedInput.old_string = input.oldText
+    }
+    if (input.newText !== undefined) {
+      normalizedInput.new_string = input.newText
+    }
+  }
+
+  return {
+    name: PI_TOOL_PRESENTATION_NAMES[name] ?? name,
+    input: normalizedInput,
+  }
+}
+
 /** 工具名称到图标组件的映射 */
 export const TOOL_ICONS: Record<string, LucideIcon> = {
   Edit: Pencil,

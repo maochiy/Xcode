@@ -1,7 +1,8 @@
 {
   "name": "@proma/electron",
-  "version": "0.16.20",
-  "description": "Proma next gen ai software with general agents - Electron App",
+  "version": "0.0.1",
+  "productName": "Xcode",
+  "description": "Xcode next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",
   "author": {
     "name": "ErlichLiu",
@@ -16,25 +17,23 @@
     "dev:kill": "bun run scripts/dev-kill.ts",
     "dev:electron": "bun run dev:kill && bun run build:main && bun run build:preload && bun run build:resources && bun run scripts/sleep.ts 2 && concurrently -k -n main,preload,app -c yellow,magenta,cyan \"bun run watch:main\" \"bun run watch:preload\" \"bunx electronmon .\"",
     "prepare:node-pty": "bun run scripts/prepare-node-pty.ts",
-    "build:main": "bun run prepare:node-pty && esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:node-pty --external:@anthropic-ai/claude-agent-sdk",
+    "build:main": "bun run prepare:node-pty && esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:node-pty",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron",
     "build:hooks": "esbuild scripts/electron-builder-after-pack.ts --bundle --platform=node --format=cjs --outfile=dist/electron-builder-after-pack.cjs && esbuild scripts/electron-builder-after-sign.ts --bundle --platform=node --format=cjs --outfile=dist/electron-builder-after-sign.cjs",
-    "watch:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:node-pty --external:@anthropic-ai/claude-agent-sdk --watch=forever",
+    "watch:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:node-pty --watch=forever",
     "watch:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron --watch=forever",
     "build:renderer": "vite build",
     "build:resources": "cp -r resources dist/ 2>/dev/null || true",
     "build:cli": "bun run scripts/build-cli.ts",
-    "sync:ccb-runtime": "bun run scripts/sync-ccb-runtime.ts",
-    "test:ccb-runtime-smoke": "electron scripts/ccb-runtime-smoke.cjs",
     "build": "bun run build:main && bun run build:preload && bun run build:hooks && bun run build:renderer && bun run build:cli && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
-    "generate:icons": "cd resources && ./generate-icons.sh",
-    "pack": "bun run build && bun run sync:ccb-runtime && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
-    "dist": "bun run build && bun run sync:ccb-runtime && electron-builder",
-    "dist:mac": "bun run build && bun run sync:ccb-runtime && electron-builder --mac",
-    "dist:win": "bun run build && bun run sync:ccb-runtime && electron-builder --win",
-    "dist:linux": "bun run build && bun run sync:ccb-runtime && electron-builder --linux",
+    "generate:icons": "electron scripts/generate-icons.cjs",
+    "pack": "bun run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
+    "dist": "bun run build && electron-builder",
+    "dist:mac": "bun run build && electron-builder --mac",
+    "dist:win": "bun run build && electron-builder --win",
+    "dist:linux": "bun run build && electron-builder --linux",
     "dist:visual": "bun run scripts/dist.ts",
     "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose",
@@ -44,14 +43,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.93.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.201",
     "@earendil-works/pi-agent-core": "0.80.9",
     "@earendil-works/pi-ai": "0.80.9",
     "@earendil-works/pi-coding-agent": "0.80.9",
     "@earendil-works/pi-tui": "0.80.9",
     "@fontsource-variable/inter": "5.2.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/codex": "0.146.0",
     "@pierre/diffs": "^1.1.20",
     "@xmldom/xmldom": "^0.8.11",
     "@xterm/addon-clipboard": "0.2.0",
@@ -172,5 +169,10 @@
   "build": {
     "extends": "electron-builder.yml"
   },
-  "proma": {}
+  "proma": {},
+  "homepage": "https://github.com/maochiy/Xcode",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maochiy/Xcode.git"
+  }
 }

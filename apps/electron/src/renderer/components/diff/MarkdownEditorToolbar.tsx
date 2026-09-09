@@ -109,7 +109,7 @@ function buildScreenshotPayload(editor: Editor): {
   clone.style.overflow = 'visible'
   clone.setAttribute('data-proma-screenshot-root', 'true')
 
-  // 透传主题 class（dark / theme-ocean-dark / theme-forest-dark 等），
+  // 透传主题 class（dark / theme-cursor-dark / theme-cursor-light 等），
   // 确保 globals.css 里基于这些 class 的 CSS 变量在截图侧也生效
   const themeClass = document.documentElement.className
 

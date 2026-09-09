@@ -158,7 +158,7 @@ function createUniqueTokenName(baseName: string): string {
   const suffix = randomUUID().slice(0, 8)
   const separator = ' · '
   const maxBaseBytes = 50 - Buffer.byteLength(`${separator}${suffix}`, 'utf-8')
-  const normalizedBaseName = baseName.trim() || 'ccb · Proma Desktop'
+  const normalizedBaseName = baseName.trim() || 'ccb · Xcode Desktop'
   return `${truncateUtf8(normalizedBaseName, maxBaseBytes)}${separator}${suffix}`
 }
 

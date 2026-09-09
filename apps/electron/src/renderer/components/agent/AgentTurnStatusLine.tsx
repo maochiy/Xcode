@@ -85,6 +85,9 @@ export interface AgentTurnStatusLineProps {
    * 默认：已处理 / 停止 / 运行中占位显示；失败等不强制显示。
    */
   showDivider?: boolean
+  /** 时间线使用无 Logo、无分隔线的紧凑摘要。 */
+  compact?: boolean
+  contentId?: string
   className?: string
 }
 
@@ -100,6 +103,8 @@ export function AgentTurnStatusLine({
   running = false,
   labelOverride,
   showDivider,
+  compact = false,
+  contentId,
   className,
 }: AgentTurnStatusLineProps): React.ReactElement {
   // 整轮折叠/状态标题按规则优先「已处理 / 你在 N 秒后停止了」；
@@ -132,10 +137,11 @@ export function AgentTurnStatusLine({
   // 折叠箭头放右侧：Logo + 文案 + 箭头
   const content = (
     <>
-      <AgentModelLogo model={model} />
+      {!compact && <AgentModelLogo model={model} />}
       <span className={cn(
         // 短状态文案完整显示；箭头紧跟文案，不拉大间距
-        'min-w-0 text-[14px] text-muted-foreground whitespace-nowrap',
+        'min-w-0 text-muted-foreground whitespace-nowrap',
+        compact ? 'text-[13px]' : 'text-[14px]',
         label.length > 24 && 'truncate',
         running && 'agent-status-shimmer',
         running && isThinkingLabel && 'agent-thinking-status-shimmer',
@@ -160,6 +166,7 @@ export function AgentTurnStatusLine({
       )}
       onClick={onToggle}
       aria-expanded={expanded}
+      aria-controls={contentId}
     >
       {content}
     </button>
@@ -172,7 +179,7 @@ export function AgentTurnStatusLine({
   return (
     <div className="space-y-2" title={tooltip || undefined}>
       {line}
-      {shouldShowDivider && (
+      {!compact && shouldShowDivider && (
         <div className="ml-7 h-px bg-border/45" aria-hidden="true" data-agent-status-divider="true" />
       )}
     </div>

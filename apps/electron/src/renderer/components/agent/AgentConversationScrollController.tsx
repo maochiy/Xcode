@@ -1,4 +1,6 @@
 import * as React from 'react'
+import { ArrowDown } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 
 export const AGENT_BOTTOM_THRESHOLD_PX = 24
@@ -81,9 +83,20 @@ export function useAgentConversationScroll(): {
  * use-stick-to-bottom 1.1.2 内部使用 70px near-bottom。
  * Agent 会话按规则收紧到 24px，并且只在用户主动滚动时解除/恢复跟随。
  */
-export function AgentConversationScrollController(): null {
+export function AgentConversationScrollController({
+  submittedMessageId,
+}: { submittedMessageId?: string } = {}): null {
   const context = useStickToBottomContext()
   const userScrollUntilRef = React.useRef(0)
+  const lastSubmittedRef = React.useRef(submittedMessageId)
+  React.useEffect(() => {
+    const previous = lastSubmittedRef.current
+    lastSubmittedRef.current = submittedMessageId
+    if (submittedMessageId && previous !== submittedMessageId) {
+      // 新用户指令主动回到最新；后续模型增量仍尊重用户上翻暂停跟随。
+      void context.scrollToBottom('instant')
+    }
+  }, [context, submittedMessageId])
 
   React.useEffect(() => {
     const element = context.scrollRef.current
@@ -135,4 +148,17 @@ export function AgentConversationScrollController(): null {
   }, [context])
 
   return null
+}
+
+/** 与主会话和子 Agent 共用跟随规则，不引入第二套滚动状态。 */
+export function AgentConversationScrollButton(): React.ReactElement | null {
+  const { isAtBottom, scrollToBottom } = useAgentConversationScroll()
+  if (isAtBottom) return null
+  return (
+    <Button type="button" variant="ghost" size="icon" aria-label="回到最新" title="回到最新"
+      className="absolute bottom-3 left-1/2 z-20 size-8 -translate-x-1/2 rounded-full bg-background shadow-sm hover:bg-accent"
+      onClick={scrollToBottom}>
+      <ArrowDown className="size-4" />
+    </Button>
+  )
 }

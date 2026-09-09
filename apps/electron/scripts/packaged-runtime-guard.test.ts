@@ -8,8 +8,6 @@ function writeRuntimeFiles(resourcesRoot: string): void {
   const files = [
     'pi-runtime/workers/pi-worker.mjs',
     'app.asar.unpacked/node_modules/@earendil-works/pi-coding-agent/package.json',
-    'app.asar.unpacked/node_modules/@openai/codex/package.json',
-    'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/package.json',
   ]
   for (const file of files) {
     const fullPath = join(resourcesRoot, file)
@@ -28,7 +26,7 @@ describe('打包产物内置 Runtime 守卫', () => {
     }
   })
 
-  test('Given darwin 产物包含 Pi/Codex/Claude 内置包 When 校验 Then 通过', () => {
+  test('Given darwin 产物包含 Pi 内核 When 校验 Then 通过', () => {
     const appOutDir = mkdtempSync(join(tmpdir(), 'proma-runtime-guard-ok-'))
     try {
       const resourcesRoot = resolvePackagedResourcesRoot(appOutDir, 'darwin')
@@ -36,8 +34,6 @@ describe('打包产物内置 Runtime 守卫', () => {
       expect(ensurePackagedBundledRuntimes(appOutDir, 'darwin')).toEqual([
         'Pi Worker',
         '@earendil-works/pi-coding-agent',
-        '@openai/codex',
-        '@anthropic-ai/claude-agent-sdk',
       ])
     } finally {
       rmSync(appOutDir, { recursive: true, force: true })

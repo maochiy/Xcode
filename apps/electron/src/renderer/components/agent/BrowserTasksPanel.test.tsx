@@ -18,8 +18,14 @@ function renderPanel(tasks: BrowserAgentTask[]): string {
 }
 
 describe('BrowserTasksPanel 浏览器任务状态', () => {
-  test('Given 运行中、暂停、完成和失败任务 When 渲染列表 Then 运行中任务使用波纹文字且不显示转圈', () => {
-    const statuses: BrowserAgentTask['status'][] = ['running', 'paused', 'completed', 'failed']
+  test('Given 运行、等待用户、暂停、完成和失败任务 When 渲染列表 Then 只有运行中任务使用流光', () => {
+    const statuses: BrowserAgentTask['status'][] = [
+      'running',
+      'waiting_user',
+      'paused',
+      'completed',
+      'failed',
+    ]
     const html = renderPanel(statuses.map((status, index) => ({
       taskId: status,
       sessionId: SESSION_ID,
@@ -33,6 +39,7 @@ describe('BrowserTasksPanel 浏览器任务状态', () => {
     expect(html).not.toContain('animate-spin')
     expect(html.match(/agent-status-shimmer/g)).toHaveLength(1)
     expect(html).not.toContain('aria-label="运行中"')
+    expect(html).toContain('aria-label="等待用户操作"')
     expect(html).toContain('aria-label="已暂停"')
     expect(html).toContain('aria-label="已完成"')
     expect(html).toContain('aria-label="失败"')

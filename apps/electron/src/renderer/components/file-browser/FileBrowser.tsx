@@ -304,7 +304,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
   }, [rootPath])
 
   const fileTree = (
-    <div className="file-tree-guide-scope py-1" onClick={handleBackgroundClick}>
+    <div className="file-tree-guide-scope inline-block min-w-full py-1" onClick={handleBackgroundClick}>
       {error && (
         <div className="px-3 py-2 text-xs text-destructive">{error}</div>
       )}
@@ -670,12 +670,12 @@ function FileTreeItem({
   const menuSelectedCount = isSelected ? selectedCount : 1
 
   return (
-    <div className="relative" onClick={handleWrapperClick}>
+    <div className="relative w-max min-w-full" onClick={handleWrapperClick}>
       <div
         ref={rowRef}
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
-          'file-tree-row relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group',
+          'file-tree-row relative flex h-8 w-max min-w-full items-center gap-1 pr-2 text-sm cursor-pointer group',
           isSticky && STICKY_ROW_BASE_CLASS,
         )}
         style={{
@@ -749,7 +749,7 @@ function FileTreeItem({
             )}
           </div>
         ) : (
-          <span className="relative z-10 truncate text-xs flex-1">{entry.name}</span>
+          <span className="relative z-10 shrink-0 whitespace-nowrap text-xs">{entry.name}</span>
         )}
 
         {/* 右侧操作按钮占位（始终占位，避免行宽跳动） */}

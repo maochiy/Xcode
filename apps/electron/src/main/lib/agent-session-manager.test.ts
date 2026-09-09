@@ -2530,3 +2530,30 @@ describe('Agent 会话 ID 引用', () => {
     expect(prompt).toContain('CLI target: archived-cross-workspace-session')
   })
 })
+
+describe('Pi 原生 transcript 投影', () => {
+  test('Given Pi消费顺序与时钟不同 When读取历史 Then不重排回合且相同文本不同UUID都保留', () => {
+    const rows = [
+      { type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '继续' }] }, _createdAt: 300 },
+      { type: 'assistant', uuid: 'assistant-1', message: { id: 'assistant-1', content: [{ type: 'text', text: '回答' }] }, _createdAt: 400 },
+      { type: 'user', uuid: 'user-2', message: { content: [{ type: 'text', text: '继续' }] }, _createdAt: 100 },
+      { type: 'assistant', uuid: 'assistant-2', message: { id: 'assistant-2', content: [{ type: 'text', text: '回答' }] }, _createdAt: 200 },
+    ].map((message) => ({ ...message, _promaNativeMessage: true }))
+    writeAgentSessionJsonl('pi-native-order', rows.map((row) => JSON.stringify(row)))
+    const result = manager.getAgentSessionSDKMessages('pi-native-order')
+    expect(result.map((message) => (message as Record<string, unknown>).uuid)).toEqual([
+      'user-1', 'assistant-1', 'user-2', 'assistant-2',
+    ])
+  })
+
+  test('Given 相同Pi UUID被重复落盘 When读取投影 Then原位保留最后快照而非追加气泡', () => {
+    const assistant = (text: string) => ({
+      type: 'assistant', uuid: 'same-native-id', _promaNativeMessage: true,
+      message: { id: 'same-native-id', content: [{ type: 'text', text }] },
+    })
+    writeAgentSessionJsonl('pi-native-update', [assistant('部分'), assistant('完整')].map((row) => JSON.stringify(row)))
+    const result = manager.getAgentSessionSDKMessages('pi-native-update')
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ message: { content: [{ type: 'text', text: '完整' }] } })
+  })
+})

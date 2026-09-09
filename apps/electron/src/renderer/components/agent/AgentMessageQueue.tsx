@@ -74,6 +74,7 @@ export function AgentMessageQueue({
       </div>
       <div className="space-y-1">
         {items.map((item, index) => {
+          const isSending = item.deliveryState === 'sending'
           const isDragging = draggingId === item.id
           const isDropBefore = dropTarget?.id === item.id && dropTarget.placement === 'before'
           const isDropAfter = dropTarget?.id === item.id && dropTarget.placement === 'after'
@@ -81,7 +82,7 @@ export function AgentMessageQueue({
           return (
             <div
               key={item.id}
-              draggable
+              draggable={!isSending}
               onDragStart={(event) => {
                 event.stopPropagation()
                 event.dataTransfer.effectAllowed = 'move'
@@ -104,7 +105,10 @@ export function AgentMessageQueue({
             >
               {isDropBefore && <div className="absolute left-2 right-2 top-0 h-0.5 rounded-full bg-primary" />}
               {isDropAfter && <div className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-primary" />}
-              <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground/55 active:cursor-grabbing" />
+              <GripVertical className={cn(
+                'size-4 shrink-0 text-muted-foreground/55',
+                isSending ? 'cursor-default opacity-40' : 'cursor-grab active:cursor-grabbing',
+              )} />
               <div className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/80">
                 {item.quotedSelection && (
                   <div className="mb-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
@@ -125,23 +129,31 @@ export function AgentMessageQueue({
                   </div>
                 )}
                 <div className="line-clamp-2">{item.text || '仅附件'}</div>
+                {item.requiresManualSend && !isSending && (
+                  <div className="text-[11px] text-muted-foreground">未发送，点击立即发送重试</div>
+                )}
+                {isSending && (
+                  <div className="text-[11px] text-muted-foreground">发送中，等待 Agent 消费…</div>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
                 <QueueIconButton
-                  label="立即发送"
-                  disabled={!canSendNow}
+                  label={isSending ? '发送中' : '立即发送'}
+                  disabled={!canSendNow || isSending}
                   onClick={() => onSendNow(item.id)}
                 >
                   <CornerDownLeft className="size-3.5" />
                 </QueueIconButton>
                 <QueueIconButton
                   label="撤回到输入框"
+                  disabled={isSending}
                   onClick={() => onRecall(item.id)}
                 >
                   <Undo2 className="size-3.5" />
                 </QueueIconButton>
                 <QueueIconButton
                   label="删除"
+                  disabled={isSending}
                   onClick={() => onRemove(item.id)}
                   danger
                 >
@@ -179,6 +191,7 @@ function QueueIconButton({
           variant="ghost"
           size="icon"
           disabled={disabled}
+          aria-label={label}
           className={cn(
             'size-7 rounded-md text-muted-foreground hover:text-foreground',
             danger && 'hover:text-destructive',

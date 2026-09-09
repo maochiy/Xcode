@@ -1,0 +1,311 @@
+/* Cursor 内置主题配色映射。
+ * 基础色来自 theme-cursor；窗口材质来自 workbench.glass.main.css 的 Agents 表面层。
+ * 保留 Proma 语义 token；透明的 UI 色在对应底色上合成，避免层叠后偏色。
+ * 主题 class 来自运行时配置，不放入 Tailwind layer，避免未静态引用的变体被裁剪。
+ */
+:root,
+.dark,
+.theme-cursor-light,
+.theme-cursor-dark,
+.theme-cursor-midnight-dark,
+.theme-cursor-high-contrast-dark,
+.theme-cursor-colorblind-light {
+  --card-foreground: var(--foreground);
+  --popover-foreground: var(--foreground);
+  --dialog-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --tab-surface: var(--content-area);
+  --tab-indicator: var(--primary);
+  --sidebar-control-stroke: var(--border);
+  --tooltip: var(--popover);
+  --tooltip-foreground: var(--foreground);
+  --tooltip-muted: var(--muted-foreground);
+  --code-bg: var(--content-area);
+  --destructive-foreground: 0 0% 100%;
+  --stop-hover-bg: hsl(var(--destructive) / 0.12);
+  --dashed-border: var(--foreground) / 0.22;
+  --dashed-border-hover: var(--foreground) / 0.4;
+  --md-preview-font-size: 15px;
+  --sidebar-material-opacity: 0.42;
+}
+
+/* cursor-light */
+:root,
+.theme-cursor-light {
+  /* 聊天代码高亮仍为深色 token，独立深底保证可读性。 */
+  --code-bg: 0 0% 9.41%;
+  --diff-added-foreground: #007041;
+  --diff-removed-foreground: #BE1744;
+  color-scheme: light;
+  --background: 0.00 0.00% 95.29%;
+  --foreground: 0.00 0.00% 7.84%;
+  --muted: 0.00 0.00% 91.69%;
+  --muted-foreground: 0.00 0.00% 31.39%;
+  --border: 0.00 0.00% 91.69%;
+  --input: 0.00 0.00% 80.63%;
+  --ring: 208.44 66.38% 45.49%;
+  --primary: 208.44 66.38% 45.49%;
+  --primary-foreground: 0.00 0.00% 98.82%;
+  --secondary: 0.00 0.00% 91.69%;
+  --accent: 0.00 0.00% 91.69%;
+  --destructive: 343.83 78.40% 41.76%;
+  --card: 0.00 0.00% 95.29%;
+  --popover: 0.00 0.00% 95.29%;
+  --dialog: 0.00 0.00% 95.29%;
+  --content-area: 0.00 0.00% 98.82%;
+  --sidebar-surface: 0.00 0.00% 95.29%;
+  --tabbar-surface: 0.00 0.00% 95.29%;
+  --sidebar-control-surface: 0.00 0.00% 88.44%;
+  --sidebar-control-surface-hover: 0.00 0.00% 88.44%;
+  --input-surface: 0.00 0.00% 98.82%;
+  --selection-background: #14141414;
+  --diff-added: #00B06838;
+  --diff-removed: #FF617B57;
+  --vscode-terminal-ansiBlack: #141414;
+  --vscode-terminal-ansiBlue: #0064B0;
+  --vscode-terminal-ansiBrightBlack: #141414BD;
+  --vscode-terminal-ansiBrightBlue: #2778C1;
+  --vscode-terminal-ansiBrightCyan: #3B7E84;
+  --vscode-terminal-ansiBrightGreen: #00854C;
+  --vscode-terminal-ansiBrightMagenta: #B54E90;
+  --vscode-terminal-ansiBrightRed: #CE405B;
+  --vscode-terminal-ansiBrightWhite: #FFFFFF;
+  --vscode-terminal-ansiBrightYellow: #A46700;
+  --vscode-terminal-ansiCyan: #176C74;
+  --vscode-terminal-ansiGreen: #007041;
+  --vscode-terminal-ansiMagenta: #92156A;
+  --vscode-terminal-ansiRed: #BE1744;
+  --vscode-terminal-ansiWhite: #FCFCFC;
+  --vscode-terminal-ansiYellow: #8B5700;
+  --vscode-terminal-background: #F3F3F3;
+  --vscode-terminal-foreground: #141414;
+  --vscode-terminal-selectionBackground: #14141414;
+  --vscode-terminal-inactiveSelectionBackground: #14141414;
+  --vscode-scrollbarSlider-background: #14141433;
+  --vscode-scrollbarSlider-hoverBackground: #14141455;
+  --vscode-scrollbarSlider-activeBackground: #14141477;
+}
+
+/* cursor-dark */
+.dark,
+.theme-cursor-dark {
+  --sidebar-material-opacity: 0.36;
+  --diff-added-foreground: #70B489;
+  --diff-removed-foreground: #FC6B83;
+  color-scheme: dark;
+  --background: 0.00 0.00% 7.84%;
+  --foreground: 0.00 0.00% 94.12%;
+  --muted: 0.00 0.00% 15.06%;
+  --muted-foreground: 0.00 0.00% 72.19%;
+  --border: 0.00 0.00% 15.72%;
+  --input: 0.00 0.00% 15.72%;
+  --ring: 210.00 34.04% 63.14%;
+  --primary: 210.00 34.04% 63.14%;
+  --primary-foreground: 220.00 15.25% 11.57%;
+  --secondary: 0.00 0.00% 15.06%;
+  --accent: 0.00 0.00% 19.38%;
+  --destructive: 343.57 73.71% 58.24%;
+  --card: 0.00 0.00% 7.84%;
+  --popover: 0.00 0.00% 7.84%;
+  --dialog: 0.00 0.00% 7.84%;
+  --content-area: 0.00 0.00% 9.41%;
+  --sidebar-surface: 0.00 0.00% 7.84%;
+  --tabbar-surface: 0.00 0.00% 7.84%;
+  --sidebar-control-surface: 0.00 0.00% 13.59%;
+  --sidebar-control-surface-hover: 0.00 0.00% 17.99%;
+  --input-surface: 0.00 0.00% 12.73%;
+  --selection-background: #40404099;
+  --diff-added: #3FA26622;
+  --diff-removed: #B8004922;
+  --vscode-terminal-ansiBlack: #242424;
+  --vscode-terminal-ansiBlue: #81A1C1;
+  --vscode-terminal-ansiBrightBlack: #F0F0F099;
+  --vscode-terminal-ansiBrightBlue: #87A6C4;
+  --vscode-terminal-ansiBrightCyan: #88C0D0;
+  --vscode-terminal-ansiBrightGreen: #70B489;
+  --vscode-terminal-ansiBrightMagenta: #B48EAD;
+  --vscode-terminal-ansiBrightRed: #FC6B83;
+  --vscode-terminal-ansiBrightWhite: #FFFFFF;
+  --vscode-terminal-ansiBrightYellow: #F1B467;
+  --vscode-terminal-ansiCyan: #88C0D0;
+  --vscode-terminal-ansiGreen: #3FA266;
+  --vscode-terminal-ansiMagenta: #B48EAD;
+  --vscode-terminal-ansiRed: #FC6B83;
+  --vscode-terminal-ansiWhite: #F0F0F0;
+  --vscode-terminal-ansiYellow: #D2943E;
+  --vscode-terminal-background: #141414;
+  --vscode-terminal-foreground: #F0F0F0;
+  --vscode-terminal-selectionBackground: #40404099;
+  --vscode-terminal-inactiveSelectionBackground: #F0F0F030;
+  --vscode-scrollbarSlider-background: #F0F0F033;
+  --vscode-scrollbarSlider-hoverBackground: #F0F0F055;
+  --vscode-scrollbarSlider-activeBackground: #F0F0F077;
+}
+
+/* cursor-midnight-dark */
+.theme-cursor-midnight-dark {
+  --sidebar-material-opacity: 0.36;
+  --diff-added-foreground: #a3be8c;
+  /* 保留午夜红的色相，提亮小字号删除行号以保证可读性。 */
+  --diff-removed-foreground: #e3969d;
+  color-scheme: dark;
+  --background: 220.00 15.25% 11.57%;
+  --foreground: 219.47 16.81% 55.69%;
+  --muted: 220.00 15.11% 16.35%;
+  --muted-foreground: 223.33 7.38% 52.16%;
+  --border: 220.00 9.34% 17.94%;
+  --input: 220.00 16.13% 18.24%;
+  --ring: 193.33 43.37% 67.45%;
+  --primary: 193.33 43.37% 67.45%;
+  --primary-foreground: 220.00 15.25% 11.57%;
+  --secondary: 220.00 15.11% 16.35%;
+  --accent: 222.00 13.16% 14.90%;
+  --destructive: 354.26 42.34% 56.47%;
+  --card: 220.00 15.25% 11.57%;
+  --popover: 220.00 15.25% 11.57%;
+  --dialog: 220.00 15.25% 11.57%;
+  --content-area: 220.00 13.04% 13.53%;
+  --sidebar-surface: 220.00 15.25% 11.57%;
+  --tabbar-surface: 220.00 15.25% 11.57%;
+  --sidebar-control-surface: 220.00 15.87% 15.57%;
+  --sidebar-control-surface-hover: 222.00 13.16% 14.90%;
+  --input-surface: 220.00 14.29% 15.10%;
+  --selection-background: #434c5e99;
+  --diff-added: #a3be8c22;
+  --diff-removed: #bf616a22;
+  --vscode-terminal-ansiBlack: #272c36;
+  --vscode-terminal-ansiBlue: #81a1c1;
+  --vscode-terminal-ansiBrightBlack: #4c566a;
+  --vscode-terminal-ansiBrightBlue: #81a1c1;
+  --vscode-terminal-ansiBrightCyan: #8fbcbb;
+  --vscode-terminal-ansiBrightGreen: #a3be8c;
+  --vscode-terminal-ansiBrightMagenta: #b48ead;
+  --vscode-terminal-ansiBrightRed: #bf616a;
+  --vscode-terminal-ansiBrightWhite: #eceff4;
+  --vscode-terminal-ansiBrightYellow: #ebcb8b;
+  --vscode-terminal-ansiCyan: #88c0d0;
+  --vscode-terminal-ansiGreen: #a3be8c;
+  --vscode-terminal-ansiMagenta: #7d7c9b;
+  --vscode-terminal-ansiRed: #bf616a;
+  --vscode-terminal-ansiWhite: #e5e9f0;
+  --vscode-terminal-ansiYellow: #ebcb8b;
+  --vscode-terminal-background: #191c22;
+  --vscode-terminal-foreground: #d8dee9;
+  --vscode-terminal-selectionBackground: #434c5e99;
+  --vscode-terminal-inactiveSelectionBackground: #88c0d033;
+  --vscode-scrollbarSlider-background: #7b88a133;
+  --vscode-scrollbarSlider-hoverBackground: #7b88a155;
+  --vscode-scrollbarSlider-activeBackground: #7b88a177;
+}
+
+/* cursor-high-contrast-dark */
+.theme-cursor-high-contrast-dark {
+  --diff-added-foreground: #A3BE8C;
+  --diff-removed-foreground: #BF616A;
+  color-scheme: dark;
+  --background: 0.00 0.00% 3.92%;
+  --foreground: 0.00 0.00% 94.12%;
+  --muted: 0.00 0.00% 11.45%;
+  --muted-foreground: 0.00 0.00% 70.77%;
+  --border: 0.00 0.00% 13.12%;
+  --input: 0.00 0.00% 16.47%;
+  /* Proma 的主色同时用于文字和按钮，改用同一 Cursor 色板中的明亮蓝色。 */
+  --ring: 0 0% 94.12%;
+  --primary: 210 34.04% 63.14%;
+  --primary-foreground: 0 0% 3.92%;
+  --secondary: 0.00 0.00% 11.45%;
+  --accent: 220.00 16.77% 31.57%;
+  --destructive: 0.00 100.00% 50.00%;
+  --card: 0.00 0.00% 3.92%;
+  --popover: 0.00 0.00% 3.92%;
+  --dialog: 0.00 0.00% 3.92%;
+  --content-area: 0.00 0.00% 3.92%;
+  --sidebar-surface: 0.00 0.00% 3.92%;
+  --tabbar-surface: 0.00 0.00% 3.92%;
+  --sidebar-control-surface: 0.00 0.00% 11.45%;
+  --sidebar-control-surface-hover: 220.00 16.77% 31.57%;
+  --input-surface: 0.00 0.00% 8.10%;
+  --selection-background: #40404099;
+  --diff-added: #A3BE8C22;
+  --diff-removed: #BF616A22;
+  --vscode-terminal-ansiBlack: #2A2A2A;
+  --vscode-terminal-ansiBlue: #81A1C1;
+  --vscode-terminal-ansiBrightBlack: #F0F0F099;
+  --vscode-terminal-ansiBrightBlue: #81A1C1;
+  --vscode-terminal-ansiBrightCyan: #88C0D0;
+  --vscode-terminal-ansiBrightGreen: #A3BE8C;
+  --vscode-terminal-ansiBrightMagenta: #B48EAD;
+  --vscode-terminal-ansiBrightRed: #BF616A;
+  --vscode-terminal-ansiBrightWhite: #FFFFFF;
+  --vscode-terminal-ansiBrightYellow: #EBCB8B;
+  --vscode-terminal-ansiCyan: #88C0D0;
+  --vscode-terminal-ansiGreen: #A3BE8C;
+  --vscode-terminal-ansiMagenta: #B48EAD;
+  --vscode-terminal-ansiRed: #BF616A;
+  --vscode-terminal-ansiWhite: #F0F0F0;
+  --vscode-terminal-ansiYellow: #EBCB8B;
+  --vscode-terminal-background: #0A0A0A;
+  --vscode-terminal-foreground: #F0F0F0;
+  --vscode-terminal-selectionBackground: #40404099;
+  --vscode-terminal-inactiveSelectionBackground: #F0F0F033;
+  --vscode-scrollbarSlider-background: #F0F0F033;
+  --vscode-scrollbarSlider-hoverBackground: #F0F0F055;
+  --vscode-scrollbarSlider-activeBackground: #F0F0F077;
+}
+
+/* cursor-colorblind-light */
+.theme-cursor-colorblind-light {
+  /* 聊天代码高亮仍为深色 token，独立深底保证可读性。 */
+  --code-bg: 0 0% 9.41%;
+  --diff-added-foreground: #0066AB;
+  --diff-removed-foreground: #A14700;
+  color-scheme: light;
+  --background: 0.00 0.00% 95.29%;
+  --foreground: 0.00 0.00% 7.84%;
+  --muted: 0.00 0.00% 91.69%;
+  --muted-foreground: 0.00 0.00% 31.39%;
+  --border: 0.00 0.00% 91.69%;
+  --input: 0.00 0.00% 80.63%;
+  --ring: 206.46 72.20% 43.73%;
+  --primary: 206.46 72.20% 43.73%;
+  --primary-foreground: 0.00 0.00% 98.82%;
+  --secondary: 0.00 0.00% 91.69%;
+  --accent: 0.00 0.00% 91.69%;
+  --destructive: 343.83 78.40% 41.76%;
+  --card: 0.00 0.00% 95.29%;
+  --popover: 0.00 0.00% 95.29%;
+  --dialog: 0.00 0.00% 95.29%;
+  --content-area: 0.00 0.00% 98.82%;
+  --sidebar-surface: 0.00 0.00% 95.29%;
+  --tabbar-surface: 0.00 0.00% 95.29%;
+  --sidebar-control-surface: 0.00 0.00% 88.44%;
+  --sidebar-control-surface-hover: 0.00 0.00% 88.44%;
+  --input-surface: 0.00 0.00% 98.82%;
+  --selection-background: #14141414;
+  --diff-added: #159EFF3D;
+  --diff-removed: #F66E0057;
+  --vscode-terminal-ansiBlack: #141414;
+  --vscode-terminal-ansiBlue: #0066AB;
+  --vscode-terminal-ansiBrightBlack: #141414BD;
+  --vscode-terminal-ansiBrightBlue: #1F79C0;
+  --vscode-terminal-ansiBrightCyan: #3B7E84;
+  --vscode-terminal-ansiBrightGreen: #00845C;
+  --vscode-terminal-ansiBrightMagenta: #B65091;
+  --vscode-terminal-ansiBrightRed: #CE405B;
+  --vscode-terminal-ansiBrightWhite: #FFFFFF;
+  --vscode-terminal-ansiBrightYellow: #907100;
+  --vscode-terminal-ansiCyan: #176C74;
+  --vscode-terminal-ansiGreen: #006E4E;
+  --vscode-terminal-ansiMagenta: #94176C;
+  --vscode-terminal-ansiRed: #BE1744;
+  --vscode-terminal-ansiWhite: #FCFCFC;
+  --vscode-terminal-ansiYellow: #795F00;
+  --vscode-terminal-background: #F3F3F3;
+  --vscode-terminal-foreground: #141414;
+  --vscode-terminal-selectionBackground: #14141414;
+  --vscode-terminal-inactiveSelectionBackground: #14141414;
+  --vscode-scrollbarSlider-background: #14141433;
+  --vscode-scrollbarSlider-hoverBackground: #14141455;
+  --vscode-scrollbarSlider-activeBackground: #14141477;
+}

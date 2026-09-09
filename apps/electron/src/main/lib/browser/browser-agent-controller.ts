@@ -6,9 +6,9 @@
  * 通过 webContents.fromId(guestId) 直接驱动，信息（截图/页面文本/标注）直接进入 Proma。
  *
  * 设计原则（极简）：
- * - 模型调用浏览器工具 → running；需要等待用户操作时保持悬浮面板可见
+ * - 模型调用浏览器工具 → running；明确等待用户操作 → waiting_user
  * - 新一轮先观察模型是否继续操作旧任务：继续则保留，不相关则在新任务开始或轮次结束时隐藏
- * - 轮次正常结束时，仅隐藏本轮未继续操作的旧任务；本轮浏览器任务继续保留
+ * - 轮次正常结束时，本轮运行中的浏览器任务收敛为 completed
  * - 模型完全不碰任务状态，只负责操作浏览器完成任务
  * - 超时（10 分钟）未活跃的条目自动清理
  * - 用户手动打开的 Tab 不受影响
@@ -16,10 +16,11 @@
 
 import * as electron from 'electron'
 import type { WebContents, WebFrameMain } from 'electron'
-import type {
-  BrowserAgentActionResult,
-  BrowserAgentTask,
-  BrowserAgentTaskStatus,
+import {
+  normalizeBrowserNavigationUrl,
+  type BrowserAgentActionResult,
+  type BrowserAgentTask,
+  type BrowserAgentTaskStatus,
 } from '@proma/shared'
 import { browserAgentPointerExpression } from './browser-agent-pointer'
 import { clickBrowserElement, readBrowserPage, typeBrowserElement } from './browser-page-reader'
@@ -55,6 +56,10 @@ const bindWaiters = new Map<string, Array<(guestId: number) => void>>()
 const tasks = new Map<string, BrowserAgentTaskRecord>()
 /** 新一轮开始后待判定是否仍相关的旧任务（sessionId → taskId 集合） */
 const pendingPreviousTaskIds = new Map<string, Set<string>>()
+/** 当前轮次实际操作过的任务（sessionId → taskId 集合） */
+const currentRunTaskIds = new Map<string, Set<string>>()
+/** AskUser 请求对应的等待任务，确保回答只恢复本次等待关联的任务。 */
+const waitingRequestTaskIds = new Map<string, Set<string>>()
 /** guestId → taskId 反查，用于 webview 事件归位 */
 const guestToTask = new Map<number, string>()
 /** 最近一次页面读取生成的元素引用：taskId → ref → frame */
@@ -90,9 +95,27 @@ export function getBrowserAgentTask(taskId: string): BrowserAgentTask | undefine
 function markBrowserAgentTaskTouched(taskId: string): void {
   const task = tasks.get(taskId)
   if (!task) return
+  const currentRun = currentRunTaskIds.get(task.sessionId)
+  currentRun?.add(taskId)
   const pending = pendingPreviousTaskIds.get(task.sessionId)
   if (!pending?.delete(taskId)) return
   if (pending.size === 0) pendingPreviousTaskIds.delete(task.sessionId)
+}
+
+function removeTaskFromWaitingRequests(taskId: string): void {
+  for (const [requestId, taskIds] of waitingRequestTaskIds) {
+    taskIds.delete(taskId)
+    if (taskIds.size === 0) waitingRequestTaskIds.delete(requestId)
+  }
+}
+
+function clearSessionWaitingRequests(sessionId: string): void {
+  for (const [requestId, taskIds] of waitingRequestTaskIds) {
+    for (const taskId of Array.from(taskIds)) {
+      if (tasks.get(taskId)?.sessionId === sessionId) taskIds.delete(taskId)
+    }
+    if (taskIds.size === 0) waitingRequestTaskIds.delete(requestId)
+  }
 }
 
 /** 创建或恢复一个浏览器任务（Agent 开始一次浏览器操作时调用） */
@@ -115,6 +138,7 @@ export function upsertBrowserAgentTask(input: {
   const timestamp = now()
   if (existing) {
     markBrowserAgentTaskTouched(existing.taskId)
+    removeTaskFromWaitingRequests(existing.taskId)
     existing.title = input.title || existing.title
     existing.status = 'running'
     existing.updatedAt = timestamp
@@ -127,7 +151,9 @@ export function upsertBrowserAgentTask(input: {
     taskId: effectiveTaskId,
     sessionId: input.sessionId,
     title: input.title || '浏览器任务',
-    url: input.url || 'about:blank',
+    url: input.url
+      ? (normalizeBrowserNavigationUrl(input.url) ?? input.url)
+      : 'about:blank',
     status: 'running',
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -175,6 +201,7 @@ export function upsertOrReuseBrowserAgentTask(input: {
   if (!reusableTask) return upsertBrowserAgentTask(input)
 
   markBrowserAgentTaskTouched(reusableTask.taskId)
+  removeTaskFromWaitingRequests(reusableTask.taskId)
   reusableTask.title = input.title || reusableTask.title
   reusableTask.status = 'running'
   reusableTask.updatedAt = now()
@@ -193,6 +220,7 @@ export function setBrowserAgentTaskStatus(
   const task = tasks.get(taskId)
   if (!task) return
   if (status === 'running') markBrowserAgentTaskTouched(taskId)
+  if (status !== 'waiting_user') removeTaskFromWaitingRequests(taskId)
   task.status = status
   task.updatedAt = now()
   emitUpdated(task)
@@ -334,14 +362,15 @@ export async function browserAgentNavigate(taskId: string, url: string): Promise
     return fail('浏览器页面尚未打开或已关闭')
   }
   const previousUrl = contents.getURL()
+  const targetUrl = normalizeBrowserNavigationUrl(url) ?? url
   taskElementFrames.delete(taskId)
   try {
-    await contents.loadURL(url)
+    await contents.loadURL(targetUrl)
     updateTaskPageState(taskId, contents)
     return ok({ url: contents.getURL(), title: contents.getTitle() })
   } catch (error) {
     const currentUrl = contents.getURL()
-    const reachedRequestedUrl = normalizeComparableUrl(currentUrl) === normalizeComparableUrl(url)
+    const reachedRequestedUrl = normalizeComparableUrl(currentUrl) === normalizeComparableUrl(targetUrl)
     const redirectedToNewPage = currentUrl !== previousUrl && isHttpUrl(currentUrl)
     // Chromium 在服务端/脚本重定向时可能用 ERR_ABORTED 结束原 loadURL Promise，
     // 但目标页其实已经成功打开。此时应按实际页面状态返回成功，避免模型反复重试。
@@ -435,7 +464,9 @@ export async function browserAgentClick(
   target: { ref?: string; selector?: string },
 ): Promise<BrowserAgentActionResult> {
   const task = tasks.get(taskId)
+  markBrowserAgentTaskTouched(taskId)
   if (task && task.status !== 'running') {
+    removeTaskFromWaitingRequests(taskId)
     task.status = 'running'
     task.updatedAt = now()
     emitUpdated(task)
@@ -465,7 +496,9 @@ export async function browserAgentType(
   text: string,
 ): Promise<BrowserAgentActionResult> {
   const task = tasks.get(taskId)
+  markBrowserAgentTaskTouched(taskId)
   if (task && task.status !== 'running') {
+    removeTaskFromWaitingRequests(taskId)
     task.status = 'running'
     task.updatedAt = now()
     emitUpdated(task)
@@ -537,20 +570,25 @@ export async function browserAgentGetState(taskId: string): Promise<BrowserAgent
   }
 }
 
-/** Agent 运行状态联动：结算同一会话仍为 running 的浏览器任务。 */
+/** Agent 运行状态联动：结算同一会话仍在执行或等待用户的浏览器任务。 */
 export function settleSessionBrowserTasks(
   sessionId: string,
-  outcome: Exclude<BrowserAgentTaskStatus, 'running'>,
+  outcome: 'paused' | 'completed' | 'failed',
 ): number {
   let changed = 0
   for (const task of tasks.values()) {
-    if (task.sessionId !== sessionId || task.status !== 'running') continue
+    if (
+      task.sessionId !== sessionId
+      || (task.status !== 'running' && task.status !== 'waiting_user')
+    ) continue
     task.status = outcome
     task.updatedAt = now()
     emitUpdated(task)
     changed += 1
   }
   pendingPreviousTaskIds.delete(sessionId)
+  currentRunTaskIds.delete(sessionId)
+  clearSessionWaitingRequests(sessionId)
   return changed
 }
 
@@ -561,6 +599,7 @@ export function settleSessionBrowserTasks(
  * 或整轮结束仍未继续旧任务，则隐藏剩余旧条目。
  */
 export function prepareSessionBrowserTasksForRun(sessionId: string): number {
+  currentRunTaskIds.set(sessionId, new Set())
   const taskIds = Array.from(tasks.values())
     .filter((task) => task.sessionId === sessionId && task.status === 'running')
     .map((task) => task.taskId)
@@ -570,6 +609,67 @@ export function prepareSessionBrowserTasksForRun(sessionId: string): number {
   }
   pendingPreviousTaskIds.set(sessionId, new Set(taskIds))
   return taskIds.length
+}
+
+/**
+ * 将本轮实际操作过的浏览器任务标记为等待用户。
+ *
+ * 只关联真实 pending 的 AskUser 请求，不从模型文本猜测，也不触碰本轮未复用的旧任务。
+ */
+export function markSessionBrowserTasksWaitingForUser(
+  sessionId: string,
+  requestId: string,
+): number {
+  const currentTaskIds = currentRunTaskIds.get(sessionId)
+  if (!currentTaskIds || currentTaskIds.size === 0) return 0
+
+  const waitingTaskIds = new Set<string>()
+  let changed = 0
+  for (const taskId of currentTaskIds) {
+    const task = tasks.get(taskId)
+    if (
+      !task
+      || task.sessionId !== sessionId
+      || (task.status !== 'running' && task.status !== 'waiting_user')
+    ) continue
+    waitingTaskIds.add(taskId)
+    if (task.status === 'waiting_user') continue
+    task.status = 'waiting_user'
+    task.updatedAt = now()
+    emitUpdated(task)
+    changed += 1
+  }
+  if (waitingTaskIds.size > 0) waitingRequestTaskIds.set(requestId, waitingTaskIds)
+  return changed
+}
+
+/**
+ * 结束指定 AskUser 请求的等待状态。
+ *
+ * 用户回答时恢复为 running；中止/清理时暂停，不能留下没有 pending 请求的等待任务。
+ * 多个并发请求关联同一任务时，必须等全部请求都回答后才恢复。
+ */
+export function resolveSessionBrowserTasksWaitingForUser(
+  sessionId: string,
+  requestId: string,
+  resume: boolean,
+): number {
+  const taskIds = waitingRequestTaskIds.get(requestId)
+  if (!taskIds) return 0
+  waitingRequestTaskIds.delete(requestId)
+  let changed = 0
+  for (const taskId of taskIds) {
+    const task = tasks.get(taskId)
+    if (!task || task.sessionId !== sessionId || task.status !== 'waiting_user') continue
+    const stillWaiting = Array.from(waitingRequestTaskIds.values())
+      .some((otherTaskIds) => otherTaskIds.has(taskId))
+    if (stillWaiting) continue
+    task.status = resume ? 'running' : 'paused'
+    task.updatedAt = now()
+    emitUpdated(task)
+    changed += 1
+  }
+  return changed
 }
 
 /** 隐藏新一轮未继续操作的旧浏览器任务。 */
@@ -592,20 +692,31 @@ export function hideUnrelatedSessionBrowserTasksForRun(sessionId: string): numbe
 /**
  * 正常完成当前轮次：
  * - 隐藏本轮未继续操作的旧任务；
- * - 保留本轮实际操作过的浏览器任务，便于等待用户登录、验证码或页面操作。
+ * - 本轮运行中的任务收敛为 completed；
+ * - 真实 AskUser pending 对应的 waiting_user 保持可操作。
  */
 export function completeSessionBrowserTasks(sessionId: string): number {
-  return hideUnrelatedSessionBrowserTasksForRun(sessionId)
+  let changed = hideUnrelatedSessionBrowserTasksForRun(sessionId)
+  for (const task of tasks.values()) {
+    if (task.sessionId !== sessionId || task.status !== 'running') continue
+    task.status = 'completed'
+    task.updatedAt = now()
+    emitUpdated(task)
+    changed += 1
+  }
+  currentRunTaskIds.delete(sessionId)
+  return changed
 }
 
 /** 清理超时未活跃的已结束/暂停任务（10 分钟） */
 export function pruneStaleBrowserAgentTasks(referenceTime = now()): number {
   let removed = 0
   for (const [taskId, task] of Array.from(tasks.entries())) {
-    if (task.status === 'running') continue
+    if (task.status === 'running' || task.status === 'waiting_user') continue
     if (referenceTime - task.updatedAt < STALE_TASK_TTL_MS) continue
     if (task.guestId != null) guestToTask.delete(task.guestId)
     taskElementFrames.delete(taskId)
+    removeTaskFromWaitingRequests(taskId)
     tasks.delete(taskId)
     removed += 1
   }
@@ -616,6 +727,8 @@ export function pruneStaleBrowserAgentTasks(referenceTime = now()): number {
 export function resetBrowserAgentTasksForTest(): void {
   tasks.clear()
   pendingPreviousTaskIds.clear()
+  currentRunTaskIds.clear()
+  waitingRequestTaskIds.clear()
   guestToTask.clear()
   bindWaiters.clear()
   taskElementFrames.clear()

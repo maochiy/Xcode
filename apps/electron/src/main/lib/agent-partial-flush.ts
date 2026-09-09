@@ -50,10 +50,47 @@ export function finalizePartialAssistantMessage(message: SDKMessage): SDKMessage
   delete record._partial
   delete record._partialBlockIndex
   delete record._partialBlockIndexes
-  if (typeof record._createdAt !== 'number') {
-    record._createdAt = Date.now()
-  }
   return record as unknown as SDKMessage
+}
+
+function isTrailingFinalAnswerMessage(message: SDKMessage): boolean {
+  if (message.type !== 'assistant') return false
+  const content = getAssistantContentBlocks(message)
+  if (content.length === 0) return false
+
+  let hasText = false
+  for (const block of content) {
+    if (!block || typeof block !== 'object') return false
+    const record = block as { type?: unknown; text?: unknown }
+    if (record.type === 'tool_use') return false
+    if (
+      record.type === 'text'
+      && typeof record.text === 'string'
+      && record.text.trim()
+    ) {
+      hasText = true
+    }
+  }
+  return hasText
+}
+
+/**
+ * result 到达后才冲刷的 partial 属于最终正文之前的过程内容。
+ *
+ * Runtime 可能先发送最终正文和 result，再由编排层固化仍未终态化的 thinking。
+ * 若直接追加到数组尾部，历史投影会把 thinking 识别成 result 后的新活动。
+ */
+function getPartialFlushInsertionIndex(accumulatedMessages: SDKMessage[]): number {
+  const terminalResultIndex = accumulatedMessages.findLastIndex((message) => message.type === 'result')
+  if (terminalResultIndex < 0) return accumulatedMessages.length
+
+  let insertionIndex = terminalResultIndex
+  while (insertionIndex > 0) {
+    const previousMessage = accumulatedMessages[insertionIndex - 1]
+    if (!previousMessage || !isTrailingFinalAnswerMessage(previousMessage)) break
+    insertionIndex -= 1
+  }
+  return insertionIndex
 }
 
 /**
@@ -145,6 +182,7 @@ export function flushPartialAssistantsToAccumulated(
   }
 
   const seenToolUseIds = knownToolUseIds ?? collectKnownToolUseIds(accumulatedMessages)
+  const finalizedPartials: SDKMessage[] = []
   for (const [key, message] of latestPartialAssistants) {
     if (existingKeys.has(key)) continue
 
@@ -181,7 +219,7 @@ export function flushPartialAssistantsToAccumulated(
     }
 
     const finalized = finalizePartialAssistantMessage(candidate)
-    accumulatedMessages.push(finalized)
+    finalizedPartials.push(finalized)
     existingKeys.add(key)
     const messageId = getAssistantMessageId(finalized) ?? ''
     for (const block of getAssistantContentBlocks(finalized)) {
@@ -189,6 +227,10 @@ export function flushPartialAssistantsToAccumulated(
       if (text) existingNarrative.add(`${messageId}::${text}`)
     }
     for (const id of collectKnownToolUseIds([finalized])) seenToolUseIds.add(id)
+  }
+  if (finalizedPartials.length > 0) {
+    const insertionIndex = getPartialFlushInsertionIndex(accumulatedMessages)
+    accumulatedMessages.splice(insertionIndex, 0, ...finalizedPartials)
   }
   latestPartialAssistants.clear()
 }

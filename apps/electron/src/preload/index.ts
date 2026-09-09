@@ -940,6 +940,9 @@ export interface ElectronAPI {
   /** 查询本机为该文件类型注册的默认打开应用（含图标 dataURL） */
   getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').DefaultAppInfo | null>
 
+  /** 查询本机可用来打开该文件的应用列表（含图标 dataURL） */
+  getAppsForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<import('@proma/shared').DefaultAppInfo[]>
+
   /** 在系统文件管理器中显示文件 */
   showInFolder: (filePath: string) => Promise<void>
 
@@ -2389,6 +2392,10 @@ const electronAPI: ElectronAPI = {
 
   getDefaultAppForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DEFAULT_APP_FOR_FILE, filePath, access) as Promise<import('@proma/shared').DefaultAppInfo | null>
+  },
+
+  getAppsForFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_APPS_FOR_FILE, filePath, access) as Promise<import('@proma/shared').DefaultAppInfo[]>
   },
 
   showInFolder: (filePath: string) => {

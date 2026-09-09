@@ -1,8 +1,16 @@
 const MIN_TERMINAL_LAYOUT_SIZE = 20
+export const INTEGRATED_TERMINAL_FOCUS_RETRY_DELAYS_MS = [0, 80, 160, 320] as const
 
 export interface IntegratedTerminalLayoutAction {
   shouldFit: boolean
   shouldFocus: boolean
+}
+
+export function isIntegratedTerminalFocused(
+  host: { contains(node: Node | null): boolean } | null | undefined,
+  active: Node | null = typeof document === 'undefined' ? null : document.activeElement,
+): boolean {
+  return Boolean(host && active && host.contains(active))
 }
 
 /**

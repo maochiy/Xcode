@@ -2,17 +2,23 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { RuntimeId } from '@proma/shared'
-import { listRuntimes, scanManagedRuntimePackages } from './runtime-registry'
-
-const runtimeIds: RuntimeId[] = ['pi', 'hermes', 'codex', 'claude']
+import {
+  ALL_RUNTIME_IDS,
+  detectRuntime,
+  listRuntimes,
+  migrateRuntimeConfig,
+  scanManagedRuntimePackages,
+} from './runtime-registry'
 
 describe('Proma Runtime Registry 契约', () => {
-  test('Given Pi、Hermes 内核和两个 Harness When 枚举运行时 Then 四个 Runtime 都可被统一识别', () => {
-    expect(runtimeIds).toEqual(['pi', 'hermes', 'codex', 'claude'])
+  test('Given 历史 Runtime 类型仍可读取 When 枚举可执行运行时 Then 只注册 Pi', () => {
+    expect(ALL_RUNTIME_IDS).toEqual(['pi'])
+    expect(detectRuntime('hermes')).toBeNull()
+    expect(detectRuntime('codex')).toBeNull()
+    expect(detectRuntime('claude')).toBeNull()
   })
 
-  test('Given Proma Runtime Home 中已有托管包 When 扫描当前平台 Then 返回可直接启动的入口', () => {
+  test('Given Proma Runtime Home 中混有旧内核托管包 When 扫描当前平台 Then 只返回 Pi', () => {
     const root = mkdtempSync(join(tmpdir(), 'proma-runtime-'))
     try {
       const piDir = join(root, 'packages', 'pi', '0.83.0', 'darwin-arm64')
@@ -37,25 +43,39 @@ describe('Proma Runtime Registry 契约', () => {
 
       expect(pi[0]?.runtimeBuildId).toBe('pi-managed-test')
       expect(pi[0]?.runtimeDir).toBe(piDir)
-      expect(codex[0]?.executablePath).toBe(join(codexDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'))
-      expect(claude[0]?.executablePath).toBe(join(claudeDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude'))
+      expect(codex).toEqual([])
+      expect(claude).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('Given 旧多内核运行时配置 When 迁移 Then 执行字段全部收敛到 Pi', () => {
+    const migrated = migrateRuntimeConfig({
+      runtimeHome: '/tmp/runtime',
+      runtimeSourceHome: null,
+      runtimeApiBaseUrl: null,
+      defaultRuntimeId: 'claude',
+      defaultHarnessId: 'codex',
+      enabledRuntimeIds: ['hermes', 'codex', 'claude'],
+      routedHarnesses: ['codex', 'claude'],
+      updatedAt: 123,
+    }, 456)
+    expect(migrated.defaultRuntimeId).toBe('pi')
+    expect(migrated.defaultHarnessId).toBe('pi')
+    expect(migrated.enabledRuntimeIds).toEqual(['pi'])
+    expect(migrated.routedHarnesses).toEqual([])
+    expect(migrated.runtimeHome).toBe('/tmp/runtime')
+  })
 })
 
 describe('内置 Runtime 安装包绑定', () => {
-  test('Given 仓库内置 Pi/Codex/Claude When 枚举 Runtime Then source 为 bundled 且不使用系统 PATH', () => {
+  test('Given 仓库内置 Pi When 枚举 Runtime Then 仅返回 bundled Pi 且不使用系统 PATH', () => {
     const runtimes = listRuntimes()
-    for (const runtimeId of ['pi', 'codex', 'claude'] as const) {
-      const runtime = runtimes.find((item) => item.id === runtimeId)
-      expect(runtime?.installation.source).toBe('bundled')
-      expect(runtime?.installation.status).toBe('ready')
-      expect(runtime?.installation.executablePath).toBeTruthy()
-      expect(runtime?.installation.source).not.toBe('system')
-    }
-    const hermes = runtimes.find((item) => item.id === 'hermes')
-    expect(hermes?.installation.source).not.toBe('system')
+    expect(runtimes.map((runtime) => runtime.id)).toEqual(['pi'])
+    expect(runtimes[0]?.installation.source).toBe('bundled')
+    expect(runtimes[0]?.installation.status).toBe('ready')
+    expect(runtimes[0]?.installation.executablePath).toBeTruthy()
+    expect(runtimes[0]?.installation.source).not.toBe('system')
   })
 })

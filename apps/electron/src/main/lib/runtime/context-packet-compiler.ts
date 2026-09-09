@@ -21,16 +21,18 @@ import {
   getWorkspaceAttachedFiles,
   getWorkspaceMcpConfig,
   getWorkspaceSkills,
-  readWorkspaceSkillContent,
   getWorkspaceAutoMemoryDir,
   readWorkspaceClaudeMd,
   listWorkspaceAutoMemoryFiles,
 } from '../agent-workspace-manager'
+import { getWorkspaceSkillsDir } from '../config-paths'
 import { getAgentSessionMessages } from '../agent-session-manager'
 import { getUserProfile } from '../user-profile-service'
 import { getRuntimeCapabilities } from './runtime-registry'
 import type { DispatchRun } from '@proma/shared'
 import { listBuiltinMcpServers } from '../builtin-mcp/catalog'
+import { EXECUTABLE_RUNTIME_ID } from './pi-runtime-policy'
+import { join } from 'node:path'
 export { contextPacketText } from './context-packet-text'
 
 export interface CompileContextPacketInput {
@@ -47,11 +49,6 @@ export interface CompileContextPacketInput {
   recentMessageLimit?: number
 }
 
-/** Skill 全文注入预算上限（字符）。防止大 Skill 全文挤爆上下文，超出只保留简介。 */
-const SKILL_CONTENT_BUDGET = 12000
-/** 单个 Skill 全文最大长度（字符）。 */
-const SKILL_CONTENT_MAX_LENGTH = 4000
-
 function contentOfMessage(message: AgentMessage): string {
   return typeof message.content === 'string' ? message.content : ''
 }
@@ -65,8 +62,20 @@ function recentMessages(sessionId: string, limit: number): Array<{ role: string;
     .map((message) => ({ role: message.role, content: contentOfMessage(message) }))
 }
 
-function runtimeCapabilities(runtimeId: RuntimeId): Partial<Record<RuntimeCapability, 'supported' | 'partial' | 'unsupported' | 'unknown'>> {
-  return getRuntimeCapabilities(runtimeId).capabilities
+function runtimeCapabilities(): Partial<Record<RuntimeCapability, 'supported' | 'partial' | 'unsupported' | 'unknown'>> {
+  return getRuntimeCapabilities(EXECUTABLE_RUNTIME_ID).capabilities
+}
+
+function piTaskGraph(taskGraph: RuntimeTaskGraph | null | undefined): RuntimeTaskGraph | null {
+  if (!taskGraph) return null
+  return {
+    ...taskGraph,
+    tasks: taskGraph.tasks.map((task) => ({
+      ...task,
+      runtimeId: EXECUTABLE_RUNTIME_ID,
+      harnessId: EXECUTABLE_RUNTIME_ID,
+    })),
+  }
 }
 
 function readMemoryFiles(workspaceSlug: string): string[] {
@@ -116,39 +125,19 @@ export function compileContextPacket(input: CompileContextPacketInput): ContextP
   const claudeMd = workspaceSlug ? readClaudeMd(workspaceSlug) : ''
   const mcp = enabledMcpNames(workspaceSlug)
   const skills = workspaceSlug
-    ? (() => {
-        const metas = getWorkspaceSkills(workspaceSlug)
-        let used = 0
-        return metas.map((skill) => {
-          // 读取 SKILL.md 全文注入 Context Packet，让 Pi/Hermes/Codex/Claude Code
-          // 都能看到完整触发条件与操作约定（否则只有 name+description 一行，
-          // 模型无法按 Skill 标准流程执行，例如 computer-use 的内置 browser MCP 路由约束）。
-          // 受总量与单条预算约束，避免大 Skill 全文挤爆上下文。
-          let content = ''
-          const remainingBudget = SKILL_CONTENT_BUDGET - used
-          if (remainingBudget > 0) {
-            try {
-              const raw = readWorkspaceSkillContent(workspaceSlug, skill.slug)
-              content = raw.slice(0, SKILL_CONTENT_MAX_LENGTH)
-              used += content.length
-            } catch {
-              content = ''
-            }
-          }
-          return {
-            name: skill.name,
-            description: skill.description,
-            path: skill.runtimePath,
-            ...(content ? { content } : {}),
-          }
-        })
-      })()
+    ? getWorkspaceSkills(workspaceSlug).map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        path: skill.runtimePath
+          ? join(skill.runtimePath, 'SKILL.md')
+          : join(getWorkspaceSkillsDir(workspaceSlug), skill.slug, 'SKILL.md'),
+      }))
     : []
   const autoMemoryFiles = workspaceSlug ? readMemoryFiles(workspaceSlug) : []
   const attachedDirectories = workspaceSlug ? getWorkspaceAttachedDirectories(workspaceSlug) : []
   const attachedFiles = workspaceSlug ? getWorkspaceAttachedFiles(workspaceSlug) : []
   const messages = recentMessages(input.sessionId, input.recentMessageLimit ?? 24)
-  const capabilities = runtimeCapabilities(input.runtimeId)
+  const capabilities = runtimeCapabilities()
   const now = Date.now()
 
   return {
@@ -184,10 +173,10 @@ export function compileContextPacket(input: CompileContextPacketInput): ContextP
     },
     attachments: input.attachments || attachedFiles,
     browserAnnotations: input.browserAnnotations || [],
-    taskGraph: input.taskGraph || null,
+    taskGraph: piTaskGraph(input.taskGraph),
     artifacts: input.artifacts || [],
     runtime: {
-      runtimeId: input.runtimeId,
+      runtimeId: EXECUTABLE_RUNTIME_ID,
       capabilities,
     },
     model: {

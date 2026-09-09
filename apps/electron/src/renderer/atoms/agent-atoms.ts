@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, AgentRuntimeModelCatalog, AgentRuntimeExecutionGraph, AgentRuntimeExecutionNode, AgentRuntimePlanSessionState, AgentRuntimeSubagentTranscript, AgentRuntimeTodoItem, AgentTurnChangeStats, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, ThinkingEffortLevel, SDKMessage, UnstagedChangesResult, GitRepoStatus, IntegratedTerminalSessionSnapshot } from '@proma/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, AgentRuntimeModelCatalog, AgentRuntimeExecutionGraph, AgentRuntimeExecutionNode, AgentRuntimePlanSessionState, AgentRuntimeSubagentTranscript, AgentRuntimeTodoItem, AgentTurnChangeStats, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, ThinkingEffortLevel, SDKMessage, SDKUserMessage, UnstagedChangesResult, GitRepoStatus, IntegratedTerminalSessionSnapshot } from '@proma/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -87,6 +87,10 @@ export function markAgentStreamStopped(state: AgentStreamState): AgentStreamStat
     running: false,
     backgroundWaiting: false,
     stopping: true,
+    ...(state.isCompacting && {
+      isCompacting: false,
+      contextCompaction: finishPendingCompaction(state.contextCompaction, true),
+    }),
     // 停止点击时立即冻结耗时，避免后端完成事件返回另一套计时口径后跳变。
     stopDurationMs: state.stopDurationMs ?? (
       startedAt == null ? undefined : Math.max(0, Date.now() - startedAt)
@@ -96,12 +100,24 @@ export function markAgentStreamStopped(state: AgentStreamState): AgentStreamStat
 }
 
 export interface ContextCompactionState {
-  status: 'running' | 'success' | 'noop' | 'failed'
+  status: 'running' | 'success' | 'noop' | 'failed' | 'stopped'
   trigger?: 'manual' | 'auto'
   summary?: string
   message?: string
   preTokens?: number
   postTokens?: number
+}
+
+/** 没有收到原生压缩完成事件时，不能把流结束推断为压缩成功。 */
+export function finishPendingCompaction(
+  compaction: ContextCompactionState | undefined,
+  stoppedByUser: boolean,
+): ContextCompactionState {
+  return {
+    ...compaction,
+    status: stoppedByUser ? 'stopped' : 'failed',
+    message: stoppedByUser ? undefined : '未收到上下文压缩完成确认',
+  }
 }
 
 /** Agent 会话的流式状态 */
@@ -156,7 +172,7 @@ export interface AgentStreamState {
    *
    * 运行中的 steering 会复用同一个 Runtime run，不能改写 startedAt，
    * 否则旧 run 的 complete 事件会被竞态保护误判为陈旧事件。UI 计时
-   * 使用这个字段，让“立即发送”的新回合从用户点击时立即开始计时。
+   * 使用这个字段，让新回合从 Pi 实际消费 steering user 时开始计时。
    */
   turnStartedAt?: number
   /** 重试状态（扩展版） */
@@ -173,7 +189,7 @@ export interface AgentStreamState {
 }
 
 /**
- * 立即开始一个 steering 回合的前端展示。
+ * Pi 实际消费 steering user 后开始对应回合的前端展示。
  *
  * Runtime 仍处于同一个 run 时，startedAt 必须保持不变，才能让旧 run
  * 的完成事件正常收尾；turnStartedAt 仅用于当前回合的处理中计时。
@@ -397,6 +413,9 @@ export const agentPendingFilesAtomFamily = atomFamily((sessionId: string) =>
  * 队列只保存在渲染进程内存中，避免跨重启恢复时误把过期上下文继续发送。
  */
 export const agentSessionMessageQueueAtom = atom<Map<string, AgentQueuedMessage[]>>(new Map())
+
+/** Pi steering 消费前的可见 user；只用于投影，不写入原生历史。 */
+export const agentImmediateUserMessagesAtom = atom<Map<string, SDKUserMessage[]>>(new Map())
 
 /**
  * 单个 session 的队列派生 atom（读写）。
@@ -667,12 +686,15 @@ export const agentTurnChangeStatsAtom = atom<
 export const agentSidePanelOpenAtom = atomWithStorage<boolean>('proma-agent-sidepanel-open', true)
 
 export const AGENT_SIDE_PANEL_MIN_WIDTH = 300
-export const AGENT_SIDE_PANEL_MAX_WIDTH = 560
+/** 重新打开功能区时的默认宽度；拖拽不再受这个上限限制。 */
+export const AGENT_SIDE_PANEL_DEFAULT_WIDTH = 560
+/** @deprecated 拖拽不再使用固定最大宽度，请改用窗口剩余空间。 */
+export const AGENT_SIDE_PANEL_MAX_WIDTH = AGENT_SIDE_PANEL_DEFAULT_WIDTH
 
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
 export const agentSidePanelWidthAtom = atomWithStorage<number>(
   'proma-agent-sidepanel-width',
-  AGENT_SIDE_PANEL_MAX_WIDTH,
+  AGENT_SIDE_PANEL_DEFAULT_WIDTH,
 )
 
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
@@ -1163,7 +1185,7 @@ export const openAgentSidePanelLauncherAtom = atom(
     const activeTab = get(agentDiffPanelTabAtom).get(sessionId)
 
     if (!wasOpen) {
-      set(agentSidePanelWidthAtom, AGENT_SIDE_PANEL_MAX_WIDTH)
+      set(agentSidePanelWidthAtom, AGENT_SIDE_PANEL_DEFAULT_WIDTH)
     }
     set(agentSidePanelOpenAtom, true)
     set(agentSidePanelLauncherAtom, (previous) => {
@@ -1298,7 +1320,7 @@ export const openAgentSidePanelTabAtom = atom(
   null,
   (get, set, input: OpenAgentSidePanelTabInput) => {
     if (!get(agentSidePanelOpenAtom)) {
-      set(agentSidePanelWidthAtom, AGENT_SIDE_PANEL_MAX_WIDTH)
+      set(agentSidePanelWidthAtom, AGENT_SIDE_PANEL_DEFAULT_WIDTH)
     }
     set(agentSidePanelOpenAtom, true)
     set(agentSidePanelLauncherAtom, (previous) => {
@@ -1881,6 +1903,14 @@ export function applyAgentEvent(
       }
 
     case 'usage_update': {
+      // Pi 的 message_start/流式快照可能携带全零 usage，此时尚未拿到用量，
+      // 不能把压缩前的有效值或压缩后的估算值清空。窗口和费用仍可独立更新。
+      const hasTokenUsage = [
+        event.usage.inputTokens,
+        event.usage.outputTokens,
+        event.usage.cacheReadTokens,
+        event.usage.cacheCreationTokens,
+      ].some((value) => value != null && value > 0)
       // 会话累计（缓存命中率）：event.usage.inputTokens 是含缓存的整轮 totalInput，
       // 净输入 = totalInput - cacheRead - cacheCreation（对齐 opencode adjusted input）。
       const cacheRead = event.usage.cacheReadTokens ?? 0
@@ -1892,13 +1922,13 @@ export function applyAgentEvent(
       const cumulativeCacheCreationTokens = (prev.cumulativeCacheCreationTokens ?? 0) + (event.usage.cacheCreationTokens != null ? cacheCreation : 0)
       return {
         ...prev,
-        ...(event.usage.inputTokens != null && {
+        ...(hasTokenUsage && event.usage.inputTokens != null && {
           inputTokens: event.usage.inputTokens,
           contextUsageIsEstimated: false,
         }),
-        ...(event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
-        ...(event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
-        ...(event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
+        ...(hasTokenUsage && event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
+        ...(hasTokenUsage && event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
+        ...(hasTokenUsage && event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
         cumulativeInputTokens,
         cumulativeCacheReadTokens,
         cumulativeCacheCreationTokens,
@@ -1922,7 +1952,7 @@ export function applyAgentEvent(
 
     case 'compact_complete': {
       const contextCompaction = {
-        status: event.status,
+        status: prev.stopping && event.status === 'failed' ? 'stopped' as const : event.status,
         trigger: event.trigger,
         summary: event.summary,
         message: event.message,

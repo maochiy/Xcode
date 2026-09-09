@@ -161,7 +161,7 @@ function main(): void {
   const results: StepResult[] = []
 
   // 打印配置信息
-  console.log(`\n${color.bgBlue}${color.bold} Proma 打包工具 ${color.reset}\n`)
+  console.log(`\n${color.bgBlue}${color.bold} Xcode 打包工具 ${color.reset}\n`)
   console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
   console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : 'arm64 + x64'}`)
   console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
@@ -169,7 +169,7 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = 8
+  const totalSteps = 7
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
@@ -216,18 +216,7 @@ function main(): void {
   )
   printStepResult(results[results.length - 1])
 
-  // ── 步骤 6: 校验并同步 CCB Runtime Artifact ──
-  step++
-  printStepStart(step, totalSteps, '校验并同步 CCB Runtime Artifact')
-  results.push(
-    runStep('同步 CCB Runtime', 'bun', ['run', 'sync:ccb-runtime'], {
-      verbose: opts.verbose,
-    })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 7: electron-builder 打包 ──
+  // ── 步骤 6: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 
@@ -265,7 +254,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 8: 校验打包后的 proma CLI（签名 + smoke）──
+  // ── 步骤 7: 校验打包后的 proma CLI（签名 + smoke）──
   step++
   printStepStart(step, totalSteps, '校验打包后的 proma CLI')
   const guardStart = Date.now()
@@ -300,7 +289,7 @@ function resolveAppOutDir(opts: DistOptions): string {
       ? [join(electronDir, 'out', `mac-${arch}`)]
       : [join(electronDir, 'out', `mac-${arch}`), join(electronDir, 'out', 'mac')]
     for (const dir of candidates) {
-      if (existsSync(join(dir, 'Proma.app'))) return dir
+      if (existsSync(join(dir, 'Xcode-Desktop.app'))) return dir
     }
     throw new Error(`未找到 mac 打包产物目录（尝试: ${candidates.join(', ')}）`)
   }

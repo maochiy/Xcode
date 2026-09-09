@@ -11,41 +11,36 @@
  */
 
 import { atom } from 'jotai'
-import { DEFAULT_INTERFACE_VARIANT, THEME_STYLES, type InterfaceVariant, type ThemeMode, type ThemeStyle } from '../../types'
+import {
+  DEFAULT_INTERFACE_VARIANT,
+  DEFAULT_THEME_MODE,
+  DEFAULT_THEME_STYLE,
+  normalizeThemeSelection,
+  resolveThemeAppearance,
+  type InterfaceVariant,
+  type ThemeMode,
+  type ThemeStyle,
+} from '../../types'
 
 /** localStorage 缓存键 */
 const THEME_CACHE_KEY = 'proma-theme-mode'
 const THEME_STYLE_CACHE_KEY = 'proma-theme-style'
 const INTERFACE_VARIANT_CACHE_KEY = 'proma-interface-variant'
 
-/**
- * 从 localStorage 读取缓存的主题模式
- */
-function getCachedThemeMode(): ThemeMode {
+/** 从 localStorage 读取并迁移缓存的主题选择。 */
+function getCachedThemeSelection(): { themeMode: ThemeMode; themeStyle: ThemeStyle } {
   try {
-    const cached = localStorage.getItem(THEME_CACHE_KEY)
-    if (cached === 'light' || cached === 'dark' || cached === 'system' || cached === 'special') {
-      return cached
-    }
+    return normalizeThemeSelection(
+      localStorage.getItem(THEME_CACHE_KEY),
+      localStorage.getItem(THEME_STYLE_CACHE_KEY)
+    )
   } catch {
     // localStorage 不可用时忽略
   }
-  return 'dark'
-}
-
-/**
- * 从 localStorage 读取缓存的特殊风格
- */
-function getCachedThemeStyle(): ThemeStyle {
-  try {
-    const cached = localStorage.getItem(THEME_STYLE_CACHE_KEY)
-    if ((THEME_STYLES as readonly string[]).includes(cached ?? '')) {
-      return cached as ThemeStyle
-    }
-  } catch {
-    // localStorage 不可用时忽略
+  return {
+    themeMode: DEFAULT_THEME_MODE,
+    themeStyle: DEFAULT_THEME_STYLE,
   }
-  return 'default'
 }
 
 /**
@@ -66,19 +61,9 @@ function getCachedInterfaceVariant(): InterfaceVariant {
 /**
  * 缓存主题模式到 localStorage
  */
-function cacheThemeMode(mode: ThemeMode): void {
+function cacheThemeSelection(mode: ThemeMode, style: ThemeStyle): void {
   try {
     localStorage.setItem(THEME_CACHE_KEY, mode)
-  } catch {
-    // localStorage 不可用时忽略
-  }
-}
-
-/**
- * 缓存特殊风格到 localStorage
- */
-function cacheThemeStyle(style: ThemeStyle): void {
-  try {
     localStorage.setItem(THEME_STYLE_CACHE_KEY, style)
   } catch {
     // localStorage 不可用时忽略
@@ -96,11 +81,13 @@ function cacheInterfaceVariant(variant: InterfaceVariant): void {
   }
 }
 
+const cachedThemeSelection = getCachedThemeSelection()
+
 /** 用户选择的主题模式 */
-export const themeModeAtom = atom<ThemeMode>(getCachedThemeMode())
+export const themeModeAtom = atom<ThemeMode>(cachedThemeSelection.themeMode)
 
 /** 用户选择的特殊风格 */
-export const themeStyleAtom = atom<ThemeStyle>(getCachedThemeStyle())
+export const themeStyleAtom = atom<ThemeStyle>(cachedThemeSelection.themeStyle)
 
 /** 用户选择的界面风格 */
 export const interfaceVariantAtom = atom<InterfaceVariant>(getCachedInterfaceVariant())
@@ -110,22 +97,12 @@ export const systemIsDarkAtom = atom<boolean>(true)
 
 /** 派生：最终解析的主题（light | dark） */
 export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
-  const mode = get(themeModeAtom)
-  if (mode === 'system') {
-    return get(systemIsDarkAtom) ? 'dark' : 'light'
-  }
-  if (mode === 'special') {
-    const style = get(themeStyleAtom)
-    // 根据特殊风格决定是浅色还是深色基调
-    return style.endsWith('-light') ? 'light' : 'dark'
-  }
-  return mode
+  return resolveThemeAppearance(
+    get(themeModeAtom),
+    get(themeStyleAtom),
+    get(systemIsDarkAtom)
+  )
 })
-
-/** 所有特殊风格 class（用于清理旧值）— 从 THEME_STYLES 单一源派生，排除 'default' */
-const ALL_THEME_STYLE_CLASSES = THEME_STYLES
-  .filter((style) => style !== 'default')
-  .map((style) => `theme-${style}` as const)
 
 /**
  * 应用主题到 DOM
@@ -136,42 +113,44 @@ const ALL_THEME_STYLE_CLASSES = THEME_STYLES
  * 不触发任何 classList mutation。避免与 vibrancy 合成层叠加
  * 导致 Chromium 重建合成层造成的全屏闪烁。
  */
-export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = 'default', systemIsDark: boolean = true): void {
+export function applyThemeToDOM(
+  themeMode: ThemeMode,
+  themeStyle: ThemeStyle = DEFAULT_THEME_STYLE,
+  systemIsDark: boolean = true
+): void {
   const html = document.documentElement
+  const selection = normalizeThemeSelection(themeMode, themeStyle)
 
   // 计算目标状态
-  let targetStyleClass: string | null = null
-  let targetIsDark: boolean
-
-  if (themeMode === 'special' && themeStyle !== 'default') {
-    targetStyleClass = `theme-${themeStyle}`
-    targetIsDark = themeStyle.endsWith('-dark')
-  } else if (themeMode === 'system') {
-    targetIsDark = systemIsDark
-  } else {
-    targetIsDark = themeMode === 'dark'
-  }
+  const targetStyleClass = selection.themeMode === 'special'
+    ? `theme-${selection.themeStyle}`
+    : null
+  const targetIsDark = resolveThemeAppearance(
+    selection.themeMode,
+    selection.themeStyle,
+    systemIsDark
+  ) === 'dark'
 
   // 读取当前状态
   const currentIsDark = html.classList.contains('dark')
-  const currentStyleClass = ALL_THEME_STYLE_CLASSES.find((c) => html.classList.contains(c)) ?? null
+  const currentStyleClasses = Array.from(html.classList)
+    .filter((className) => className.startsWith('theme-'))
+  const styleClassesMatch = targetStyleClass === null
+    ? currentStyleClasses.length === 0
+    : currentStyleClasses.length === 1 && currentStyleClasses[0] === targetStyleClass
 
   // 与目标一致 → 直接跳过，避免触发 CSS 重新级联
-  if (currentIsDark === targetIsDark && currentStyleClass === targetStyleClass) {
+  if (currentIsDark === targetIsDark && styleClassesMatch) {
     return
   }
 
-  // [FLASH-DEBUG] 仅在真正发生 DOM 变更时打印
-  console.log(
-    `[FLASH-DEBUG] applyThemeToDOM apply: mode=${themeMode}, style=${themeStyle}, systemIsDark=${systemIsDark}, diff={dark: ${currentIsDark}→${targetIsDark}, style: ${currentStyleClass}→${targetStyleClass}}`
-  )
-
-  // 只修改确实需要变的 class
-  if (currentStyleClass !== targetStyleClass) {
-    if (currentStyleClass) {
-      html.classList.remove(currentStyleClass)
+  if (!styleClassesMatch) {
+    for (const className of currentStyleClasses) {
+      if (className !== targetStyleClass) {
+        html.classList.remove(className)
+      }
     }
-    if (targetStyleClass) {
+    if (targetStyleClass && !html.classList.contains(targetStyleClass)) {
       html.classList.add(targetStyleClass)
     }
   }
@@ -216,14 +195,12 @@ export async function initializeTheme(
 ): Promise<() => void> {
   // 从主进程加载持久化设置
   const settings = await window.electronAPI.getSettings()
-  setThemeMode(settings.themeMode)
-  cacheThemeMode(settings.themeMode)
-
-  // 加载特殊风格
-  if (setThemeStyle && settings.themeStyle) {
-    setThemeStyle(settings.themeStyle)
-    cacheThemeStyle(settings.themeStyle)
+  const themeSelection = normalizeThemeSelection(settings.themeMode, settings.themeStyle)
+  setThemeMode(themeSelection.themeMode)
+  if (setThemeStyle) {
+    setThemeStyle(themeSelection.themeStyle)
   }
+  cacheThemeSelection(themeSelection.themeMode, themeSelection.themeStyle)
 
   const interfaceVariant = settings.interfaceVariant || DEFAULT_INTERFACE_VARIANT
   if (setInterfaceVariant) {
@@ -242,15 +219,13 @@ export async function initializeTheme(
 
   // 监听用户手动切换主题（跨窗口同步，如 Quick Task 面板）
   const cleanupThemeSettings = window.electronAPI.onThemeSettingsChanged((payload) => {
-    const mode = payload.themeMode as ThemeMode
-    const style = (payload.themeStyle || 'default') as ThemeStyle
+    const selection = normalizeThemeSelection(payload.themeMode, payload.themeStyle)
     const variant = (payload.interfaceVariant || DEFAULT_INTERFACE_VARIANT) as InterfaceVariant
-    setThemeMode(mode)
-    cacheThemeMode(mode)
+    setThemeMode(selection.themeMode)
     if (setThemeStyle) {
-      setThemeStyle(style)
-      cacheThemeStyle(style)
+      setThemeStyle(selection.themeStyle)
     }
+    cacheThemeSelection(selection.themeMode, selection.themeStyle)
     if (setInterfaceVariant) {
       setInterfaceVariant(variant)
       cacheInterfaceVariant(variant)
@@ -264,21 +239,42 @@ export async function initializeTheme(
 }
 
 /**
- * 更新主题模式并持久化
+ * 原子更新主题选择并持久化。
  *
- * 同时更新 localStorage 缓存和主进程配置文件。
+ * 仅在主进程写入成功后更新 localStorage，失败时由调用方回滚 atoms / DOM。
  */
-export async function updateThemeMode(mode: ThemeMode): Promise<void> {
-  cacheThemeMode(mode)
-  await window.electronAPI.updateSettings({ themeMode: mode })
+export async function updateThemeSelection(
+  mode: ThemeMode,
+  style: ThemeStyle
+): Promise<void> {
+  const updated = await window.electronAPI.updateSettings({
+    themeMode: mode,
+    themeStyle: style,
+  })
+  const selection = normalizeThemeSelection(updated.themeMode, updated.themeStyle)
+  cacheThemeSelection(selection.themeMode, selection.themeStyle)
 }
 
 /**
- * 更新特殊风格并持久化
+ * 更新主题模式并持久化。
+ *
+ * @deprecated 请优先使用 updateThemeSelection，避免跨窗口收到中间状态。
+ */
+export async function updateThemeMode(mode: ThemeMode): Promise<void> {
+  const updated = await window.electronAPI.updateSettings({ themeMode: mode })
+  const selection = normalizeThemeSelection(updated.themeMode, updated.themeStyle)
+  cacheThemeSelection(selection.themeMode, selection.themeStyle)
+}
+
+/**
+ * 更新特殊风格并持久化。
+ *
+ * @deprecated 请优先使用 updateThemeSelection，避免跨窗口收到中间状态。
  */
 export async function updateThemeStyle(style: ThemeStyle): Promise<void> {
-  cacheThemeStyle(style)
-  await window.electronAPI.updateSettings({ themeStyle: style })
+  const updated = await window.electronAPI.updateSettings({ themeStyle: style })
+  const selection = normalizeThemeSelection(updated.themeMode, updated.themeStyle)
+  cacheThemeSelection(selection.themeMode, selection.themeStyle)
 }
 
 /**

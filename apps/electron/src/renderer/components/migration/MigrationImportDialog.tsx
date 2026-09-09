@@ -308,7 +308,7 @@ function V2ContentSummary({ preview, workspaceMappings, localWorkspaces, onWorks
         <label className="text-sm font-medium text-foreground">项目导入方式</label>
         {localWorkspaces.length === 0 && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            Proma 不再自动创建内部工作区。请先从侧边栏添加一个本机已有项目目录，再将备份内容合并到该项目。
+            Xcode 不再自动创建内部工作区。请先从侧边栏添加一个本机已有项目目录，再将备份内容合并到该项目。
           </p>
         )}
         <div className="rounded-lg border border-border/50 divide-y divide-border/30">

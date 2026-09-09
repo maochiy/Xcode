@@ -3,6 +3,7 @@ import { createStore } from 'jotai'
 import type { AgentRuntimeExecutionGraph } from '@proma/shared'
 import {
   agentDiffPanelTabAtom,
+  agentImmediateUserMessagesAtom,
   agentChildDelegationSessionsAtomFamily,
   agentRuntimeExecutionGraphAtomFamily,
   agentRuntimeExecutionGraphsAtom,
@@ -20,10 +21,40 @@ import {
   recentlyModifiedPathsAtom,
   liveMessagesMapAtom,
   markAgentStreamStopped,
+  finishPendingCompaction,
   stabilizeAgentRuntimeExecutionGraph,
   type AgentStreamState,
 } from './agent-atoms'
 import type { AgentSessionMeta, SDKMessage } from '@proma/shared'
+import { canAutoSendQueuedAgentMessage, shouldDeferAgentMessage } from '@/lib/agent-message-queue'
+
+test('Given steering 尚未消费且运行刚结束 When 切换 Tab Then 不抢发下一条，投递结算后才解除等待', () => {
+  const store = createStore()
+  const sessionId = 'handoff'
+  const unmount = store.sub(agentImmediateUserMessagesAtom, () => {})
+  store.set(agentImmediateUserMessagesAtom, new Map([[sessionId, [{
+    type: 'user', uuid: 'next', parent_tool_use_id: null,
+    message: { content: [{ type: 'text', text: '下一条' }] },
+  }]]]))
+  unmount()
+  const remount = store.sub(agentImmediateUserMessagesAtom, () => {})
+  const readQueueState = () => ({
+    streaming: false, stopping: false, messagesRefreshing: false,
+    queueLength: 1, canSendNow: true,
+    immediateSending: store.get(agentImmediateUserMessagesAtom).has(sessionId),
+  })
+  expect(canAutoSendQueuedAgentMessage(readQueueState())).toBe(false)
+  expect(shouldDeferAgentMessage(readQueueState())).toBe(true)
+  // 另一个会话不受此交接影响。
+  expect(canAutoSendQueuedAgentMessage({
+    ...readQueueState(),
+    immediateSending: store.get(agentImmediateUserMessagesAtom).has('other'),
+  })).toBe(true)
+  store.set(agentImmediateUserMessagesAtom, new Map())
+  expect(canAutoSendQueuedAgentMessage(readQueueState())).toBe(true)
+  expect(shouldDeferAgentMessage(readQueueState())).toBe(false)
+  remount()
+})
 
 function createStreamState(overrides: Partial<AgentStreamState> = {}): AgentStreamState {
   return {
@@ -40,6 +71,38 @@ function createStreamState(overrides: Partial<AgentStreamState> = {}): AgentStre
 }
 
 describe('Agent 上下文压缩状态', () => {
+  test.each(['manual', 'auto'] as const)('Given %s 压缩中及压缩后 When 收到全零流式 usage Then 保留上下文数字与估算状态', (trigger) => {
+    const running = applyAgentEvent(createStreamState(), { type: 'compacting', trigger })
+    const emptyUsage = {
+      type: 'usage_update' as const,
+      usage: {
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+        contextWindow: 256_000,
+      },
+    }
+    expect(applyAgentEvent(running, emptyUsage)).toMatchObject({
+      running: true, isCompacting: true, inputTokens: 180_000,
+      cacheReadTokens: 160_000, contextWindow: 256_000,
+    })
+    const compacted = applyAgentEvent(running, {
+      type: 'compact_complete', status: 'success', trigger, estimatedTokensAfter: 32_000,
+    })
+    expect(applyAgentEvent(compacted, emptyUsage)).toMatchObject({
+      inputTokens: 32_000, contextUsageIsEstimated: true, contextWindow: 256_000,
+    })
+  })
+
+  test.each(['noop', 'failed', 'stopped'] as const)('Given 压缩终态为 %s When 收尾仅有零 usage Then 不清空既有上下文', (status) => {
+    const state = applyAgentEvent(createStreamState(), {
+      type: 'compact_complete', status, trigger: 'manual',
+    })
+    const result = applyAgentEvent(state, {
+      type: 'complete', usage: { inputTokens: 0, outputTokens: 0 },
+    })
+    expect(result).toMatchObject({
+      inputTokens: 180_000, isCompacting: false, contextCompaction: { status },
+    })
+  })
   test('given Pi 手动压缩提供预估 token when 压缩完成 then 显示预估值并清除旧明细', () => {
     const result = applyAgentEvent(createStreamState(), {
       type: 'compact_complete',
@@ -138,6 +201,31 @@ describe('Agent 上下文压缩状态', () => {
     })
   })
 
+  test('given 流式 usage_update when 累计缓存命中率 then 按净输入口径累加', () => {
+    const result = applyAgentEvent(createStreamState({
+      inputTokens: undefined,
+      cacheReadTokens: undefined,
+      cacheCreationTokens: undefined,
+    }), {
+      type: 'usage_update',
+      usage: {
+        inputTokens: 44_000,
+        cacheReadTokens: 30_000,
+        cacheCreationTokens: 2_000,
+        outputTokens: 800,
+      },
+    })
+
+    expect(result).toMatchObject({
+      inputTokens: 44_000,
+      cacheReadTokens: 30_000,
+      cacheCreationTokens: 2_000,
+      cumulativeInputTokens: 12_000,
+      cumulativeCacheReadTokens: 30_000,
+      cumulativeCacheCreationTokens: 2_000,
+    })
+  })
+
   test('given 没有 Pi 预估 token 的压缩完成事件 when 处理 then 保持既有上下文用量', () => {
     const result = applyAgentEvent(createStreamState(), { type: 'compact_complete', status: 'success' })
 
@@ -150,6 +238,26 @@ describe('Agent 上下文压缩状态', () => {
 })
 
 describe('Agent 暂停即时反馈', () => {
+  test.each(['manual', 'auto'] as const)('Given %s 压缩正在进行 When 点击停止并收到迟到的失败事件 Then 立即显示停止而不是成功或失败', (trigger) => {
+    const stopped = markAgentStreamStopped(createStreamState({
+      isCompacting: true,
+      contextCompaction: { status: 'running', trigger },
+    }))
+    expect(stopped.isCompacting).toBe(false)
+    expect(stopped.contextCompaction).toMatchObject({ status: 'stopped', trigger })
+    const settled = applyAgentEvent(stopped, {
+      type: 'compact_complete', status: 'failed', trigger, message: 'Aborted',
+    })
+    expect(settled.contextCompaction?.status).toBe('stopped')
+  })
+
+  test('Given 压缩缺失原生终态 When 流结束 Then 不能伪造成功，停止和异常分别显示', () => {
+    expect(finishPendingCompaction({ status: 'running', trigger: 'auto' }, false))
+      .toMatchObject({ status: 'failed', trigger: 'auto', message: '未收到上下文压缩完成确认' })
+    expect(finishPendingCompaction({ status: 'running', trigger: 'manual' }, true))
+      .toMatchObject({ status: 'stopped', trigger: 'manual' })
+  })
+
   test('Given Agent 正在运行且存在未完成工具 When 用户点击暂停 Then 立即进入停止态并保留计时起点', () => {
     const state = createStreamState({
       startedAt: 123,
@@ -186,7 +294,7 @@ describe('Agent 暂停即时反馈', () => {
 })
 
 describe('Agent 立即发送即时反馈', () => {
-  test('Given Runtime 正在运行 When steering 立即发送 Then 只重置当前回合展示且保留 Runtime 纪元与上下文用量', () => {
+  test('Given Runtime 正在运行 When Pi 确认消费 steering user Then 只重置当前回合展示且保留 Runtime 纪元与上下文用量', () => {
     const previous = createStreamState({
       startedAt: 100,
       turnStartedAt: 100,

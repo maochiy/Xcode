@@ -257,9 +257,9 @@ export interface ChannelModel {
   id: string
   /** 模型显示名称 */
   name: string
-  /** 模型说明；传给 CCB 模型目录并用于选择器辅助展示。 */
+  /** 模型说明；传给 Runtime 模型目录并用于选择器辅助展示。 */
   description?: string
-  /** 上下文窗口 Token 数；未配置时由 CCB 内核判断。 */
+  /** 上下文窗口 Token 数；未配置时使用 Runtime 默认值。 */
   contextWindow?: number
   /**
    * 上下文自动压缩触发占比（0-100，百分比）。
@@ -271,7 +271,7 @@ export interface ChannelModel {
   enabled: boolean
   /** 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除 */
   source?: 'manual' | 'fetched'
-  /** 模型显式声明支持的思考等级；空数组表示不支持。 */
+  /** 模型支持的思考等级；未配置时默认全部启用，空数组表示不支持。 */
   thinkingEffortLevels?: import('./agent').ThinkingEffortLevel[]
   /** 模型推荐的默认思考等级。 */
   defaultThinkingEffortLevel?: import('./agent').ThinkingEffortLevel

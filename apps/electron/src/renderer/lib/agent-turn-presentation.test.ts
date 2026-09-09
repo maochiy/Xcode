@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { SDKContentBlock, SDKMessage } from '@proma/shared'
+import type { SDKContentBlock, SDKMessage, SDKToolUseBlock } from '@proma/shared'
 import type { AssistantTurn } from '@proma/session-core'
 import {
   buildAgentTurnPresentation,
@@ -185,6 +185,227 @@ describe('Agent Turn 展示模型', () => {
     expect(ordered[0]?.uuid).toBe('runtime-snapshot')
   })
 
+  test('Given Pi 暂停时两个不同 UUID 返回同文正文 When 展示 Then 两条原生消息仍按原位保留', () => {
+    const first = {
+      type: 'assistant' as const,
+      uuid: 'pi-same-text-1',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: {
+        id: 'pi-same-text-1',
+        content: [text('相同正文')],
+      },
+    }
+    const second = {
+      type: 'assistant' as const,
+      uuid: 'pi-same-text-2',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: {
+        id: 'pi-same-text-2',
+        content: [text('相同正文')],
+      },
+    }
+    const interrupted = {
+      type: 'result' as const,
+      subtype: 'interrupted',
+      uuid: 'pi-interrupted',
+      _promaNativeMessage: true,
+      _stoppedByUser: true,
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [first, second],
+      turnMessages: [first, second, interrupted],
+      model: 'gpt-5.6-sol',
+    }
+
+    const ordered = orderAssistantMessagesForPresentation(turn)
+
+    expect(ordered.map((message) => message.uuid)).toEqual([
+      'pi-same-text-1',
+      'pi-same-text-2',
+    ])
+  })
+
+  test('Given Pi 同一 UUID 的 partial 与 final 位于原消息槽位 When 展示 Then 原位采用最后快照', () => {
+    const before = {
+      type: 'assistant' as const,
+      uuid: 'pi-before',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: { content: [thinking('先分析')] },
+    }
+    const partial = {
+      type: 'assistant' as const,
+      uuid: 'pi-snapshot',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      _partial: true,
+      message: { content: [text('部分正文')] },
+    }
+    const after = {
+      type: 'assistant' as const,
+      uuid: 'pi-after',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: { content: [thinking('继续分析')] },
+    }
+    const final = {
+      type: 'assistant' as const,
+      uuid: 'pi-snapshot',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: { content: [text('最终正文')] },
+    }
+
+    const deduped = dedupeAssistantSnapshotsForPresentation([
+      before,
+      partial,
+      after,
+      final,
+    ])
+
+    expect(deduped.map((message) => message.uuid)).toEqual([
+      'pi-before',
+      'pi-snapshot',
+      'pi-after',
+    ])
+    expect(deduped[1]?.message.content).toEqual([text('最终正文')])
+  })
+
+  test('Given 原生快照后混有同文 legacy 暂停快照 When 兼容去重 Then legacy 算法不能吞掉原生消息', () => {
+    const native = {
+      type: 'assistant' as const,
+      uuid: 'native-paused',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      _promaPausedByUser: true,
+      message: { content: [text('已检查')] },
+    }
+    const legacy = {
+      type: 'assistant' as const,
+      uuid: 'legacy-paused',
+      parent_tool_use_id: null,
+      _promaPausedByUser: true,
+      message: { content: [text('已检查并完成')] },
+    }
+    expect(dedupeAssistantSnapshotsForPresentation([native, legacy], {
+      allowCrossIdentityTextSnapshots: true,
+    }).map((message) => message.uuid)).toEqual(['native-paused', 'legacy-paused'])
+  })
+
+  test('Given Pi result 携带整次 run 累计正文且本轮只有工具 When 展示 Then 不虚构重复最终正文', () => {
+    const assistant = {
+      type: 'assistant' as const,
+      uuid: 'pi-tool-only',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: { content: [tool('pi-read', 'Read')] },
+    }
+    const result = {
+      type: 'result' as const,
+      subtype: 'success',
+      uuid: 'pi-cumulative-result',
+      _promaNativeMessage: true,
+      result: '上一原生 turn 正文。本原生 turn 正文。',
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [assistant],
+      turnMessages: [assistant, result],
+      model: 'gpt-5.6-sol',
+    }
+
+    const presentation = buildAgentTurnPresentation({
+      id: 'pi-cumulative-result',
+      turn,
+      blocks: assistant.message.content,
+    })
+
+    expect(presentation.finalItems).toHaveLength(0)
+    expect(presentation.activities.map((item) => item.block)).toEqual([
+      tool('pi-read', 'Read'),
+    ])
+  })
+
+  test('Given Pi turn 混有新旧 assistant 且 result 匹配首条正文 When 排序 Then 不移动原消息顺序', () => {
+    const nativeAnswer = {
+      type: 'assistant' as const,
+      uuid: 'native-answer-first',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: {
+        id: 'native-answer-first',
+        content: [text('最终正文')],
+      },
+    }
+    const legacyActivity = {
+      type: 'assistant' as const,
+      uuid: 'legacy-activity-second',
+      parent_tool_use_id: null,
+      message: {
+        id: 'legacy-activity-second',
+        content: [thinking('旧投影活动')],
+      },
+    }
+    const result = {
+      type: 'result' as const,
+      subtype: 'success',
+      result: '最终正文',
+      _promaNativeMessage: true,
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [nativeAnswer, legacyActivity],
+      turnMessages: [nativeAnswer, legacyActivity, result],
+      model: 'gpt-5.6-sol',
+    }
+
+    expect(
+      orderAssistantMessagesForPresentation(turn).map((message) => message.uuid),
+    ).toEqual(['native-answer-first', 'legacy-activity-second'])
+  })
+
+  test('Given Pi 原生 tool_result 缺少 tool_use When 展示 Then 不猜测或补造工具活动', () => {
+    const assistant = {
+      type: 'assistant' as const,
+      uuid: 'pi-thinking-only',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: { content: [thinking('等待原生工具事件')] },
+    }
+    const toolResult = {
+      type: 'user' as const,
+      uuid: 'pi-tool-result-only',
+      parent_tool_use_id: null,
+      _promaNativeMessage: true,
+      message: {
+        content: [{
+          type: 'tool_result' as const,
+          tool_use_id: 'pi-missing-tool-use',
+          content: '1\tconst value = true',
+        }],
+      },
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [assistant],
+      turnMessages: [assistant, toolResult],
+      model: 'gpt-5.6-sol',
+    }
+
+    const presentation = buildAgentTurnPresentation({
+      id: 'pi-no-missing-tool-projection',
+      turn,
+      blocks: assistant.message.content,
+    })
+
+    expect(presentation.activities.map((item) => item.block.type)).toEqual([
+      'thinking',
+    ])
+  })
+
   test('Given 纯正文 When 分类 Then 正文与唯一 Logo 同行且没有活动折叠', () => {
     const turn = createTurn([text('最终回答')])
     const presentation = buildAgentTurnPresentation({
@@ -225,6 +446,98 @@ describe('Agent Turn 展示模型', () => {
     })
     expect(presentation.activities.map((item) => item.block.type)).toEqual(['tool_use'])
     expect(presentation.finalItems.map((item) => item.block.type)).toEqual(['text'])
+  })
+
+  test('Given Pi 工具后最终正文先于 tool_result 投影到达 When 流式渲染 Then 正文首增量立即进入最终回答区', () => {
+    const firstUsage = {
+      type: 'assistant' as const,
+      uuid: 'pi-usage-before-tool',
+      parent_tool_use_id: null,
+      message: {
+        content: [],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+        },
+      },
+    }
+    const thinkingBeforeTool = {
+      type: 'assistant' as const,
+      uuid: 'pi-thinking-before-tool',
+      parent_tool_use_id: null,
+      message: {
+        id: 'pi-segment-before-tool',
+        content: [thinking('先读取目标文件。')],
+      },
+    }
+    const toolMessage = {
+      type: 'assistant' as const,
+      uuid: 'pi-tool-message',
+      parent_tool_use_id: null,
+      message: {
+        content: [tool('pi-read-tool', 'Read')],
+      },
+    }
+    const secondUsage = {
+      type: 'assistant' as const,
+      uuid: 'pi-usage-after-tool',
+      parent_tool_use_id: null,
+      message: {
+        content: [],
+        usage: {
+          input_tokens: 200,
+          output_tokens: 20,
+        },
+      },
+    }
+    const finalPartial = {
+      type: 'assistant' as const,
+      uuid: 'pi-final-segment',
+      parent_tool_use_id: null,
+      _partial: true,
+      message: {
+        id: 'pi-final-segment-id',
+        content: [
+          thinking('整理最终结论。'),
+          text('最终正文首个增量。'),
+        ],
+      },
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [
+        firstUsage,
+        thinkingBeforeTool,
+        toolMessage,
+        secondUsage,
+        finalPartial,
+      ],
+      // Pi 的 tool.completed 与后续 message.delta 来自不同事件；
+      // Renderer 合帧时最终正文可能先可见，tool_result 下一帧才进入 Turn。
+      turnMessages: [
+        firstUsage,
+        thinkingBeforeTool,
+        toolMessage,
+        secondUsage,
+        finalPartial,
+      ],
+      model: 'gpt-5.6-sol',
+    }
+    const ordered = orderAssistantMessagesForPresentation(turn)
+    const presentation = buildAgentTurnPresentation({
+      id: 'turn-pi-tool-result-race',
+      turn,
+      blocks: ordered.flatMap((message) => message.message.content),
+      isStreaming: true,
+    })
+
+    expect(presentation.finalAnswerStarted).toBe(true)
+    expect(presentation.finalItems.map((item) => item.block.type)).toEqual(['text'])
+    expect(presentation.activities.map((item) => item.block.type)).toEqual([
+      'thinking',
+      'tool_use',
+      'thinking',
+    ])
   })
 
   test('Given thinking 后直接出现正文 When 流式渲染 Then 正文立即进入最终回答区', () => {
@@ -485,7 +798,7 @@ describe('Agent Turn 展示模型', () => {
     expect(presentation.visibleActivities.filter((item) => item.block.type === 'text')).toHaveLength(2)
   })
 
-  test('Given 用户暂停且已有多条过程正文 When 收起展示 Then 过程正文全部保留不消失', () => {
+  test('Given 用户暂停且已有多条过程正文 When 展示停止轮 Then 完整活动按原顺序保留', () => {
     const turn = createTurn([
       thinking('先分析'),
       text('第一段固定说明'),
@@ -503,6 +816,7 @@ describe('Agent Turn 展示模型', () => {
 
     expect(presentation.status).toBe('stopped')
     expect(presentation.visibleActivities.map((item) => item.block.type)).toEqual([
+      'thinking',
       'text',
       'text',
       'thinking',
@@ -510,6 +824,7 @@ describe('Agent Turn 展示模型', () => {
     expect(presentation.visibleActivities.map((item) => (
       item.block.type === 'text' ? item.block.text : item.block.type === 'thinking' ? item.block.thinking : null
     ))).toEqual([
+      '先分析',
       '第一段固定说明',
       '第二段固定说明',
       '还在分析',
@@ -517,7 +832,7 @@ describe('Agent Turn 展示模型', () => {
   })
 
 
-  test('Given 用户暂停且末尾是未标记过程正文 When 收起展示 Then 不提升为最终回答且多条正文仍可见', () => {
+  test('Given 用户暂停且末尾是未标记过程正文 When 展示停止轮 Then 不提升为最终回答且多条正文仍可见', () => {
     // 运行中这些正文因 isStreaming 不会进 final；暂停后也不能因 !isStreaming 被吃掉
     const turn = createTurn([
       thinking('先分析'),
@@ -541,6 +856,7 @@ describe('Agent Turn 展示模型', () => {
     expect(presentation.visibleActivities.map((item) => (
       item.block.type === 'text' ? item.block.text : item.block.type
     ))).toEqual([
+      'thinking',
       '第一段说明',
       '第二段说明',
     ])
@@ -755,10 +1071,9 @@ describe('Agent Turn 展示模型', () => {
     // 没有 result 消息时，用 _createdAt 差值（10.5 秒 → 11 秒）计算耗时
     expect(presentation.durationMs).toBe(10_500)
     expect(presentation.status).toBe('stopped')
-    // 用户停止：可折叠查看轨迹，默认收起（与运行中一致）
+    // 展示层仍可提供手动折叠，但 presentation 不再把停止轮压成最新一行。
     expect(presentation.collapsePolicy.collapsible).toBe(true)
     expect(presentation.collapsePolicy.defaultExpanded).toBe(false)
-    // 收起态只保留最新可折叠活动
     expect(presentation.visibleActivities.map((item) => item.block.type)).toEqual(['thinking'])
   })
 
@@ -794,6 +1109,55 @@ describe('Agent Turn 展示模型', () => {
     expect(presentation.durationMs).toBe(12_300)
     expect(presentation.status).toBe('stopped')
     expect(presentation.hasRenderableActivity).toBe(true)
+  })
+
+  test('Given 立即发送产生错误 result 与 interrupted result When 展示旧回合 Then 不把过程正文副本注入为最终正文', () => {
+    const processText = '先读取项目说明。'
+    const nextProcessText = '已读取项目说明，继续检查应用配置。'
+    const assistantMsg = {
+      type: 'assistant' as const,
+      uuid: 'paused-assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [
+          text(processText),
+          tool('read-package'),
+          text(nextProcessText),
+        ],
+      },
+    }
+    const executionError = {
+      type: 'result' as const,
+      subtype: 'error_during_execution',
+      result: `${processText}${nextProcessText}`,
+      errors: ['Request was aborted'],
+    }
+    const interrupted = {
+      type: 'result' as const,
+      subtype: 'interrupted',
+      _stoppedByUser: true,
+      _durationMs: 12_000,
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [assistantMsg],
+      turnMessages: [assistantMsg, executionError, interrupted],
+      model: 'claude-sonnet-4',
+    }
+
+    const presentation = buildAgentTurnPresentation({
+      id: 'turn-immediate-send-interrupted',
+      turn,
+      blocks: assistantMsg.message.content,
+    })
+
+    expect(presentation.status).toBe('stopped')
+    expect(presentation.finalItems).toHaveLength(0)
+    expect(
+      presentation.activities
+        .filter((item) => item.block.type === 'text')
+        .map((item) => (item.block as { type: 'text'; text: string }).text),
+    ).toEqual([processText, nextProcessText])
   })
 
   
@@ -832,6 +1196,56 @@ describe('Agent Turn 展示模型', () => {
     // 历史停止轮：可折叠、默认收起，续聊不退化成「已完成」
     expect(presentation.collapsePolicy.collapsible).toBe(true)
     expect(presentation.collapsePolicy.defaultExpanded).toBe(false)
+  })
+
+  test('Given 多个工具的停止轮已继续新一轮 When 重建历史展示 Then 老工具全部可见且均非运行态', () => {
+    const firstTool = tool('stopped-read', 'Read')
+    const secondTool = tool('stopped-grep', 'Grep')
+    const assistantMsg = {
+      type: 'assistant' as const,
+      uuid: 'stopped-tools-assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [
+          thinking('先读取再搜索'),
+          firstTool,
+          secondTool,
+        ],
+      },
+    }
+    const interrupted = {
+      type: 'result' as const,
+      subtype: 'interrupted',
+      _stoppedByUser: true,
+      _durationMs: 9_000,
+    }
+    const turn: AssistantTurn = {
+      type: 'assistant-turn',
+      assistantMessages: [assistantMsg],
+      turnMessages: [assistantMsg, interrupted],
+      model: 'gpt-5.6-sol',
+    }
+
+    const presentation = buildAgentTurnPresentation({
+      id: 'stopped-tools-history',
+      turn,
+      blocks: assistantMsg.message.content,
+      // 继续新一轮后，会话级停止标记已经清除。
+      stoppedByUser: false,
+    })
+
+    expect(presentation.status).toBe('stopped')
+    expect(
+      presentation.visibleActivities
+        .filter((item) => item.block.type === 'tool_use')
+        .map((item) => ({
+          id: (item.block as SDKToolUseBlock).id,
+          running: item.running,
+        })),
+    ).toEqual([
+      { id: 'stopped-read', running: false },
+      { id: 'stopped-grep', running: false },
+    ])
   })
 
 test('Given CCB 最终回复被同步到工具活动之前 When 展示 Then 仍识别为已处理并默认折叠活动', () => {
@@ -951,12 +1365,11 @@ test('Given CCB 最终回复被同步到工具活动之前 When 展示 Then 仍�
       { id: 'glob-missing', name: 'Glob' },
       { id: 'read-missing-text', name: 'Read' },
     ])
-    // 停止收起态：最新工具行可见
-    expect(presentation.visibleActivities.at(-1)?.block).toMatchObject({
-      type: 'tool_use',
-      id: 'read-missing-text',
-      name: 'Read',
-    })
+    expect(
+      presentation.visibleActivities
+        .filter((item) => item.block.type === 'tool_use')
+        .map((item) => (item.block as { id: string }).id),
+    ).toEqual(['glob-missing', 'read-missing-text'])
   })
 
   test('Given CCB 只保存 Read 结果 When 展示 Then 投影缺失的读取活动并保留最终回答', () => {

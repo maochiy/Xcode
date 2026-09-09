@@ -7,8 +7,60 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
-import { DEFAULT_INTERFACE_VARIANT, DEFAULT_THEME_MODE } from '../../types'
+import {
+  DEFAULT_INTERFACE_VARIANT,
+  normalizeThemeSelection,
+} from '../../types'
 import type { AppSettings } from '../../types'
+
+interface LegacySettingsFields {
+  experimentalAgentRuntimeSwitchEnabled?: boolean
+  agentEffort?: unknown
+}
+
+function createDefaultSettings(): AppSettings {
+  return {
+    ...normalizeThemeSelection(undefined, undefined),
+    interfaceVariant: DEFAULT_INTERFACE_VARIANT,
+    onboardingCompleted: false,
+    environmentCheckSkipped: false,
+    notificationsEnabled: true,
+    longTextPasteAsAttachmentEnabled: false,
+    richTextRenderingEnabled: false,
+    feishuSessionMirror: { mode: 'off' },
+    builtinMcpDisabledIds: [],
+    windowsShellPreference: 'auto',
+    agentThinking: { type: 'adaptive' },
+    gitAttributionEnabled: true,
+  }
+}
+
+function isSettingsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function persistThemeMigration(
+  filePath: string,
+  data: Record<string, unknown>,
+  themeMode: AppSettings['themeMode'],
+  themeStyle: NonNullable<AppSettings['themeStyle']>
+): void {
+  if (data.themeMode === themeMode && data.themeStyle === themeStyle) {
+    return
+  }
+
+  try {
+    writeFileSync(filePath, JSON.stringify({
+      ...data,
+      themeMode,
+      themeStyle,
+    }, null, 2), 'utf-8')
+    console.log(`[设置] 已迁移主题配置: ${themeMode}/${themeStyle}`)
+  } catch (error) {
+    // 迁移落盘失败不应阻塞启动；当前进程仍使用规范化后的安全值。
+    console.error('[设置] 主题配置迁移写入失败:', error)
+  }
+}
 
 /**
  * 获取应用设置
@@ -19,28 +71,24 @@ export function getSettings(): AppSettings {
   const filePath = getSettingsPath()
 
   if (!existsSync(filePath)) {
-    return {
-      themeMode: DEFAULT_THEME_MODE,
-      interfaceVariant: DEFAULT_INTERFACE_VARIANT,
-      onboardingCompleted: false,
-      environmentCheckSkipped: false,
-      notificationsEnabled: true,
-      longTextPasteAsAttachmentEnabled: false,
-      richTextRenderingEnabled: false,
-      feishuSessionMirror: { mode: 'off' },
-      builtinMcpDisabledIds: [],
-      windowsShellPreference: 'auto',
-      agentThinking: { type: 'adaptive' },
-      gitAttributionEnabled: true,
-    }
+    return createDefaultSettings()
   }
 
   try {
     const raw = readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<AppSettings> & {
-      experimentalAgentRuntimeSwitchEnabled?: boolean
-      agentEffort?: unknown
+    const parsed: unknown = JSON.parse(raw)
+    if (!isSettingsRecord(parsed)) {
+      throw new Error('设置文件内容不是对象')
     }
+    const data = parsed as Record<string, unknown> & Partial<AppSettings> & LegacySettingsFields
+    const themeSelection = normalizeThemeSelection(data.themeMode, data.themeStyle)
+    persistThemeMigration(
+      filePath,
+      data,
+      themeSelection.themeMode,
+      themeSelection.themeStyle
+    )
+
     // 读取时清理旧 Runtime Selector 与独立 effort 设置。
     const {
       experimentalAgentRuntimeSwitchEnabled: _legacyRuntimeSwitch,
@@ -49,7 +97,7 @@ export function getSettings(): AppSettings {
     } = data
     return {
       ...settings,
-      themeMode: data.themeMode || DEFAULT_THEME_MODE,
+      ...themeSelection,
       interfaceVariant: data.interfaceVariant || DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: data.onboardingCompleted ?? false,
       environmentCheckSkipped: data.environmentCheckSkipped ?? false,
@@ -65,20 +113,7 @@ export function getSettings(): AppSettings {
     }
   } catch (error) {
     console.error('[设置] 读取失败:', error)
-    return {
-      themeMode: DEFAULT_THEME_MODE,
-      interfaceVariant: DEFAULT_INTERFACE_VARIANT,
-      onboardingCompleted: false,
-      environmentCheckSkipped: false,
-      notificationsEnabled: true,
-      longTextPasteAsAttachmentEnabled: false,
-      richTextRenderingEnabled: false,
-      feishuSessionMirror: { mode: 'off' },
-      builtinMcpDisabledIds: [],
-      windowsShellPreference: 'auto',
-      agentThinking: { type: 'adaptive' },
-      gitAttributionEnabled: true,
-    }
+    return createDefaultSettings()
   }
 }
 
@@ -89,15 +124,26 @@ export function getSettings(): AppSettings {
  */
 export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   const current = getSettings()
+  const normalizedUpdates = { ...updates }
+
+  if (updates.themeMode !== undefined || updates.themeStyle !== undefined) {
+    const themeSelection = normalizeThemeSelection(
+      updates.themeMode ?? current.themeMode,
+      updates.themeStyle ?? current.themeStyle
+    )
+    normalizedUpdates.themeMode = themeSelection.themeMode
+    normalizedUpdates.themeStyle = themeSelection.themeStyle
+  }
+
   const updated: AppSettings = {
     ...current,
-    ...updates,
+    ...normalizedUpdates,
   }
   const filePath = getSettingsPath()
 
   try {
     writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8')
-    console.log('[设置] 已更新 keys:', Object.keys(updates).join(', '))
+    console.log('[设置] 已更新 keys:', Object.keys(normalizedUpdates).join(', '))
   } catch (error) {
     console.error('[设置] 写入失败:', error)
     throw new Error('写入应用设置失败')

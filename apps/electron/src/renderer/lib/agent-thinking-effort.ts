@@ -1,23 +1,57 @@
-import type {
-  AgentRuntimeModelInfo,
-  ThinkingConfig,
-  ThinkingEffortLevel,
+import {
+  DEFAULT_THINKING_EFFORT_LEVELS,
+  type AgentRuntimeModelInfo,
+  type ThinkingConfig,
+  type ThinkingEffortLevel,
 } from '@proma/shared'
 
 export const THINKING_EFFORT_ORDER: readonly ThinkingEffortLevel[] = [
-  'low',
-  'medium',
-  'high',
-  'xhigh',
+  ...DEFAULT_THINKING_EFFORT_LEVELS,
   'max',
 ]
 
 export const THINKING_EFFORT_LABELS: Record<ThinkingEffortLevel, string> = {
   low: '轻度',
-  medium: '标准',
-  high: '高级',
-  xhigh: '深度',
-  max: '最大',
+  medium: '中',
+  high: '高',
+  xhigh: '极高',
+  max: '极高',
+}
+
+/** 连续拖动位置只在预览档位和最终提交时取整，避免滑块在拖动途中跳格。 */
+export function snapThinkingEffortPosition(position: number, levelCount: number): number {
+  return Math.max(0, Math.min(Math.max(0, levelCount - 1), Math.round(position)))
+}
+
+/** 键盘始终一次切换一档，不沿用指针拖动的细分步长。 */
+export function getThinkingEffortKeyIndex(
+  key: string,
+  index: number,
+  levelCount: number,
+): number | undefined {
+  if (key === 'Home') return 0
+  if (key === 'End') return Math.max(0, levelCount - 1)
+  if (['ArrowLeft', 'ArrowDown', 'PageDown'].includes(key)) {
+    return snapThinkingEffortPosition(index - 1, levelCount)
+  }
+  if (['ArrowRight', 'ArrowUp', 'PageUp'].includes(key)) {
+    return snapThinkingEffortPosition(index + 1, levelCount)
+  }
+  return undefined
+}
+
+/** 输入框合并最高档的展示；保留当前 max 值，避免仅打开面板就改变请求。 */
+export function getThinkingEffortSliderLevels(
+  levels: readonly ThinkingEffortLevel[],
+  value: ThinkingEffortLevel,
+): ThinkingEffortLevel[] {
+  const highestLevel = value === 'max' && levels.includes('max')
+    ? 'max'
+    : levels.includes('xhigh') ? 'xhigh' : 'max'
+  return THINKING_EFFORT_ORDER.filter(level =>
+    levels.includes(level)
+    && (level !== 'max' && level !== 'xhigh' || level === highestLevel),
+  )
 }
 
 export interface AgentThinkingEffortCapability {
@@ -30,7 +64,7 @@ export interface AgentRuntimeThinkingSelection {
   effortLevel?: ThinkingEffortLevel
 }
 
-/** 优先精确匹配；仅在 CCB 规范化 `[1m]` 后缀时回退到规范化 ID。 */
+/** 优先精确匹配；仅在 Runtime 规范化 `[1m]` 后缀时回退到规范化 ID。 */
 export function findAgentRuntimeModel(
   models: AgentRuntimeModelInfo[],
   modelId: string | null | undefined,
@@ -45,7 +79,7 @@ export function findAgentRuntimeModel(
 }
 
 /**
- * Thinking/Effort 能力完全以 CCB Runtime 的模型目录为准。
+ * Thinking/Effort 能力完全以 Runtime 的模型目录为准。
  *
  * Renderer 不根据 Provider 或模型名称做任何推断；Runtime 不可用或明确不支持时隐藏控件。
  */
@@ -75,12 +109,13 @@ export function normalizeAgentThinkingEffortLevel(
   value: ThinkingEffortLevel | undefined,
 ): ThinkingEffortLevel | undefined {
   if (!capability) return undefined
+  if (value === 'max' && capability.levels.includes('xhigh')) return 'xhigh'
   return value && capability.levels.includes(value)
     ? value
     : capability.defaultLevel
 }
 
-/** 只把 CCB 明确声明支持的 Thinking/Effort 配置发送给 Runtime。 */
+/** 只把模型目录声明支持的 Thinking/Effort 配置发送给 Runtime。 */
 export function resolveAgentRuntimeThinkingSelection(
   modelInfo: AgentRuntimeModelInfo | undefined,
   thinkingConfig: ThinkingConfig | undefined,

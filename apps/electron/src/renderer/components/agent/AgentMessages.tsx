@@ -7,8 +7,8 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { RotateCw, AlertTriangle, ChevronDown, ChevronRight, Loader2, CheckCircle2, CircleAlert } from 'lucide-react'
-import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
+import { RotateCw, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AgentWelcomeScreen } from '@/components/welcome/AgentWelcomeScreen'
 import {
   Message,
   MessageContent,
@@ -28,22 +28,35 @@ import { cn } from '@/lib/utils'
 import { AssistantTurnRenderer, groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, type MessageGroup } from './SDKMessageRenderer'
 import { buildLiveGroupSet } from './live-group-set'
 import { mergePersistedAndLiveMessages } from '@/lib/agent-live-message'
+import { appendImmediateUserMessages } from '@/lib/agent-immediate-send'
 import { findStreamingFallbackInsertionIndex } from '@/lib/agent-streaming-order'
 import { shouldSuppressAgentRunningIndicator } from '@/lib/agent-running-state'
 import { isTurnStoppedByUser } from '@/lib/agent-turn-presentation'
 import { AgentRunningIndicator } from './AgentRunningIndicator'
 import { AgentTurnStatusLine } from './AgentTurnStatusLine'
+import {
+  CompactionStatusLine,
+  type CompactionStatusLineStatus,
+} from './CompactionStatusLine'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
-import { AgentConversationScrollController } from './AgentConversationScrollController'
+import { AgentConversationScrollController, AgentConversationScrollButton } from './AgentConversationScrollController'
 import type {
   RetryAttempt,
   SDKAssistantMessage,
   SDKMessage,
   SDKSystemMessage,
+  SDKUserMessage,
 } from '@proma/shared'
 import { getSDKCompactStatus } from '@proma/shared'
-import { agentSessionsAtom, type AgentStreamState } from '@/atoms/agent-atoms'
+import {
+  agentImmediateUserMessagesAtom,
+  agentSessionsAtom,
+  allPendingAskUserRequestsAtom,
+  allPendingExitPlanRequestsAtom,
+  allPendingPermissionRequestsAtom,
+  type AgentStreamState,
+} from '@/atoms/agent-atoms'
 
 function stableStringify(value: unknown): string {
   if (value == null || typeof value !== 'object') return JSON.stringify(value) ?? String(value)
@@ -96,32 +109,19 @@ export function isCompactionControlHistoryGroup(group: MessageGroup): boolean {
     return getSDKCompactStatus(group.message) === 'compacting'
       || group.message.subtype === 'context_compaction_config'
   }
-  return group.type === 'user' && (extractUserText(group.message) ?? '').trim() === '/compact'
+  if (group.type !== 'user') return false
+  const command = (extractUserText(group.message) ?? '').trim()
+  return command === '/compact'
 }
 
-function formatCompactionTokens(tokens: number | undefined): string | undefined {
-  if (!tokens || tokens <= 0) return undefined
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
-  return String(tokens)
-}
-
-function getCompactionTokenDetail(
-  preTokens: number | undefined,
-  postTokens: number | undefined,
-): string | undefined {
-  const pre = formatCompactionTokens(preTokens)
-  const post = formatCompactionTokens(postTokens)
-  return pre && post ? `上下文约 ${pre} → ${post} tokens。` : undefined
-}
-
-/** 上下文压缩进度状态（Codex 风格：在消息流末尾内联展示一行） */
+/** 上下文压缩进度状态；history 终态由 system group 原位渲染，tail 仅作为实时或缺失消息时的兜底。 */
 export interface ContextCompactionProgress {
-  status: 'running' | 'success' | 'noop' | 'failed'
-  label: string
+  status: CompactionStatusLineStatus
+  placement: 'history' | 'tail'
   detail?: string
-  /** 触发来源：区分「已压缩 / 已自动压缩」文案 */
   trigger?: 'manual' | 'auto'
+  preTokens?: number
+  postTokens?: number
 }
 
 export function getContextCompactionProgress(
@@ -129,90 +129,107 @@ export function getContextCompactionProgress(
   isCompacting: boolean | undefined,
   streamCompaction: AgentStreamState['contextCompaction'] | undefined,
 ): ContextCompactionProgress | undefined {
+  let latestControlIndex = -1
+  let latestCompactMessageIndex = -1
+  let latestCompactMessage: SDKSystemMessage | undefined
+
+  messages.forEach((message, index) => {
+    if (
+      message.type === 'user'
+      && (extractUserText(message as SDKUserMessage) ?? '').trim() === '/compact'
+    ) {
+      latestControlIndex = index
+      return
+    }
+
+    if (message.type !== 'system') return
+    const compactStatus = getSDKCompactStatus(message as SDKSystemMessage)
+    if (!compactStatus) return
+    latestCompactMessageIndex = index
+    latestCompactMessage = message as SDKSystemMessage
+    if (compactStatus === 'compacting') latestControlIndex = index
+  })
+
+  const messageStatus = latestCompactMessage
+    ? getSDKCompactStatus(latestCompactMessage)
+    : undefined
+  const messageIsTerminal = messageStatus != null && messageStatus !== 'compacting'
+  const hasNewerControl = latestControlIndex > latestCompactMessageIndex
+
+  // streamCompaction 表示当前控制请求，优先级高于历史最后一条 system 状态。
+  // 否则新一轮乐观 running 会被旧历史终态压住；同理，停止/发送失败后若
+  // 原生终态尚未落盘，也不能被最后一条 compacting 重新解释为 running。
   if (streamCompaction?.status === 'running') {
     return {
       status: 'running',
-      label: streamCompaction.trigger === 'auto' ? '正在自动压缩上下文' : '正在压缩上下文',
+      placement: 'tail',
       trigger: streamCompaction.trigger,
     }
   }
-  if (streamCompaction?.status === 'success') {
-    return {
-      status: 'success',
-      label: streamCompaction.trigger === 'auto' ? '上下文已自动压缩' : '上下文已压缩',
-      detail: getCompactionTokenDetail(streamCompaction.preTokens, streamCompaction.postTokens),
-      trigger: streamCompaction.trigger,
-    }
-  }
-  if (streamCompaction?.status === 'noop') {
-    return {
-      status: 'noop',
-      label: '当前上下文无需压缩',
-    }
-  }
-  if (streamCompaction?.status === 'failed') {
-    return {
-      status: 'failed',
-      label: '上下文压缩失败',
-      detail: streamCompaction.message ?? '请检查模型连接后重试。',
+
+  if (streamCompaction) {
+    const canReuseHistoryPosition = messageIsTerminal
+      && !hasNewerControl
+      && latestCompactMessage != null
+      && (
+        messageStatus === streamCompaction.status
+        || (
+          streamCompaction.status === 'stopped'
+          && (messageStatus === 'failed' || messageStatus === 'stopped')
+        )
+      )
+
+    if (!canReuseHistoryPosition) {
+      return {
+        status: streamCompaction.status,
+        placement: 'tail',
+        detail: streamCompaction.message,
+        trigger: streamCompaction.trigger,
+        preTokens: streamCompaction.preTokens,
+        postTokens: streamCompaction.postTokens,
+      }
     }
   }
 
-  const latestStatus = [...messages].reverse().find((message) =>
-    message.type === 'system' && getSDKCompactStatus(message as SDKSystemMessage) != null,
-  ) as SDKSystemMessage | undefined
-  const status = latestStatus ? getSDKCompactStatus(latestStatus) : undefined
+  if (messageIsTerminal && !hasNewerControl && latestCompactMessage) {
+    const metadata = latestCompactMessage.compact_metadata
+    // 用户停止时 Runtime 可能仍持久化一条 abort failed；界面以已冻结的 stopped
+    // 状态原位替换该行，避免同时出现“停止”兜底和“失败”历史两条状态。
+    const displayStatus = streamCompaction?.status === 'stopped'
+      ? 'stopped'
+      : messageStatus
+    return {
+      status: displayStatus,
+      placement: 'history',
+      trigger: latestCompactMessage.compactTrigger ?? metadata?.trigger,
+      detail: displayStatus === 'failed'
+        ? latestCompactMessage.compact_error ?? latestCompactMessage.message
+        : undefined,
+      preTokens: latestCompactMessage.compactPreTokens ?? metadata?.pre_tokens,
+      postTokens: latestCompactMessage.compactionEstimatedTokensAfter ?? metadata?.post_tokens,
+    }
+  }
 
-  if (status === 'success' && latestStatus) {
-    return {
-      status: 'success',
-      label: latestStatus.compactTrigger === 'auto' ? '上下文已自动压缩' : '上下文已压缩',
-      trigger: latestStatus.compactTrigger,
-    }
-  }
-  if (status === 'noop' && latestStatus) {
-    return {
-      status: 'noop',
-      label: '当前上下文无需压缩',
-    }
-  }
-  if (status === 'failed' && latestStatus) {
-    return {
-      status: 'failed',
-      label: '上下文压缩失败',
-      detail: latestStatus.compact_error ?? latestStatus.message ?? '请检查模型连接后重试。',
-    }
-  }
-  if (status === 'compacting' || isCompacting) {
+  if (messageStatus === 'compacting' || isCompacting || hasNewerControl) {
     return {
       status: 'running',
-      label: '正在压缩上下文',
+      placement: 'tail',
+      trigger: latestCompactMessage?.compactTrigger,
     }
   }
   return undefined
 }
 
-/**
- * 上下文压缩内联状态行（Codex 风格）。
- * 压缩进行中：spinner +「正在压缩上下文 / 正在自动压缩上下文」；
- * 压缩完成：对勾 +「上下文已压缩 / 上下文已自动压缩」（附 token 变化明细）；
- * 失败/无需压缩：对应图标与说明。
- */
+/** 保留导出名供既有调用方使用，实际视觉统一由 CompactionStatusLine 承载。 */
 export function CompactionInlineLine({ progress }: { progress: ContextCompactionProgress }): React.ReactElement {
-  const isRunning = progress.status === 'running'
-  const isSuccess = progress.status === 'success'
-  const isFailed = progress.status === 'failed'
   return (
-    <div className="flex items-center gap-2 py-1.5 pl-7 text-[13px] text-muted-foreground">
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        {isRunning && <Loader2 className="size-3.5 animate-spin text-blue-500" />}
-        {isSuccess && <CheckCircle2 className="size-3.5 text-green-500" />}
-        {progress.status === 'noop' && <CheckCircle2 className="size-3.5 text-muted-foreground" />}
-        {isFailed && <CircleAlert className="size-3.5 text-destructive" />}
-      </span>
-      <span className={cn(isFailed && 'text-destructive')}>{progress.label}</span>
-      {progress.detail && <span className="text-xs text-muted-foreground/70">{progress.detail}</span>}
-    </div>
+    <CompactionStatusLine
+      status={progress.status}
+      trigger={progress.trigger}
+      detail={progress.detail}
+      preTokens={progress.preTokens}
+      postTokens={progress.postTokens}
+    />
   )
 }
 
@@ -225,6 +242,9 @@ interface AgentMessagesProps {
   sessionModelId?: string
   /** 消息是否已完成首次加载 */
   messagesLoaded?: boolean
+  /** 首次任务页使用会话所属项目，不使用全局当前项目。 */
+  projectName?: string | null
+  onSelectWelcomePrompt?: (prompt: string) => void
   /** Phase 4: 持久化的 SDKMessage（新格式） */
   persistedSDKMessages?: SDKMessage[]
   streaming: boolean
@@ -246,11 +266,6 @@ interface AgentMessagesProps {
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
   onCompact?: () => void
-}
-
-/** 空状态引导 — 使用 WelcomeEmptyState */
-function EmptyState(): React.ReactElement {
-  return <WelcomeEmptyState />
 }
 
 /** 重试提示组件 - 折叠式 */
@@ -453,7 +468,7 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds.toFixed(0)}s`
 }
 
-export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, waitingForQueuedRun = false, queuedRunStartedAt, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, messagesLoaded, projectName, onSelectWelcomePrompt, persistedSDKMessages, streaming, waitingForQueuedRun = false, queuedRunStartedAt, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const sessions = useAtomValue(agentSessionsAtom)
@@ -505,7 +520,7 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
   const startedAt = streamState?.turnStartedAt ?? streamState?.startedAt
 
   // fallback 只保留一层平滑队列：具体 text/thinking block 统一由
-  // ContentBlock / ThinkingStreamPanel 逐字渲染。这里若再次平滑，
+  // ContentBlock / ThinkingActivity 逐字渲染。这里若再次平滑，
   // 同一段内容会经过两层队列，造成正文滞后和忽快忽慢。
   const smoothContent = streamingContent
   const smoothContentBlocks = React.useMemo(() => {
@@ -564,8 +579,17 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
 
   const transitioning = needsInstant || transitioningCooldown
 
+  const immediateUserMessages = useAtomValue(agentImmediateUserMessagesAtom).get(sessionId)
+  const pendingPermissionRequests = useAtomValue(allPendingPermissionRequestsAtom).get(sessionId)
+  const pendingAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom).get(sessionId)
+  const pendingExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom).get(sessionId)
+  const hasPendingInteraction = Boolean(
+    pendingPermissionRequests?.length
+    || pendingAskUserRequests?.length
+    || pendingExitPlanRequests?.length,
+  )
   // 合并持久化 + 实时 SDKMessage（供 ContentBlock 内查找工具结果）
-  const allSDKMessages = React.useMemo(() => {
+  const sourceSDKMessages = React.useMemo(() => {
     const persisted = persistedSDKMessages ?? []
     const live = liveMessages ?? []
     const stampStableKey = (message: SDKMessage): SDKMessage => {
@@ -612,26 +636,49 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
       { identityOf },
     )
   }, [persistedSDKMessages, liveMessages])
+  const pendingImmediateUserIds = React.useMemo(() => {
+    if (!immediateUserMessages?.length) return new Set<string>()
+    const sourceUserIds = new Set(
+      sourceSDKMessages.flatMap((message) =>
+        message.type === 'user' && message.uuid ? [message.uuid] : [],
+      ),
+    )
+    return new Set(
+      immediateUserMessages.flatMap((message) =>
+        message.uuid && !sourceUserIds.has(message.uuid) ? [message.uuid] : [],
+      ),
+    )
+  }, [immediateUserMessages, sourceSDKMessages])
+  const allSDKMessages = React.useMemo(
+    () => appendImmediateUserMessages(sourceSDKMessages, immediateUserMessages),
+    [immediateUserMessages, sourceSDKMessages],
+  )
 
   const hasContent = allSDKMessages.length > 0
 
-  // 压缩状态在消息流末尾内联展示（Codex 风格）；
-  // 压缩期间抑制普通运行指示器，避免两行状态并存。
+  // 压缩期间用专用状态行替代普通运行指示器，避免同时出现 thinking spinner。
   const suppressAgentRunning = shouldSuppressAgentRunningIndicator(streamState)
+  const suppressWaitingFeedback = suppressAgentRunning
+    || hasPendingInteraction
+    || retrying != null
   const contextCompaction = React.useMemo(
-    () => getContextCompactionProgress(liveMessages ?? [], streamState?.isCompacting, streamState?.contextCompaction),
-    [liveMessages, streamState?.isCompacting, streamState?.contextCompaction],
+    () => getContextCompactionProgress(allSDKMessages, streamState?.isCompacting, streamState?.contextCompaction),
+    [allSDKMessages, streamState?.isCompacting, streamState?.contextCompaction],
   )
 
-  // 统一分组：将持久化 + 实时消息合并后再分组，确保 system 消息（如压缩分割线）出现在正确位置
+  // 统一分组：将持久化 + 实时消息合并后再分组，确保压缩终态留在原生位置。
   const allGroups = React.useMemo(() => {
     return groupIntoTurns(allSDKMessages, sessionModelId)
   }, [allSDKMessages, sessionModelId])
-  // 压缩过程由底部 Progress Overlay 独立承载，不占用对话历史、迷你地图或用户锚点。
+  // 控制消息不进入历史；压缩终态 system group 保留。
   const visibleGroups = React.useMemo(
     () => allGroups.filter((group) => !isCompactionControlHistoryGroup(group)),
     [allGroups],
   )
+  const latestCompactionGroupIndex = visibleGroups.findLastIndex(
+    (group) => group.type === 'system' && getSDKCompactStatus(group.message) != null,
+  )
+  const hasTailCompactionStatus = contextCompaction?.placement === 'tail'
 
   // 标记哪些 group 属于实时流式消息（用于 isStreaming / onFork 差异化渲染）
   const liveGroupSet = React.useMemo(() => {
@@ -639,8 +686,9 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
       allGroups,
       liveMessages,
       streaming,
+      currentTurnStartedAt: startedAt,
     })
-  }, [allGroups, liveMessages, streaming])
+  }, [allGroups, liveMessages, streaming, startedAt])
 
   // 迷你地图数据 — 直接使用统一的 allGroups（无需去重）
   const minimapItems: MinimapItem[] = React.useMemo(
@@ -686,19 +734,23 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
   // 流式中：通过 liveGroupSet 精确判断（只有 streaming 时 liveGroupSet 才非空）
   // 流式结束后：直接检查 liveMessages 中是否有助手消息，
   // 防止 streaming→false 到 liveMessages 被清除之间的过渡帧中 fallback 气泡重复渲染
-  const queuedUserGroupIndex = findStreamingFallbackInsertionIndex(visibleGroups, liveMessages ?? [])
+  const queuedUserGroupIndex = findStreamingFallbackInsertionIndex(visibleGroups, liveMessages ?? [], startedAt)
   const hasLiveAssistantContent = streaming
     ? visibleGroups.some((group, index) =>
       group.type === 'assistant-turn'
       && liveGroupSet.has(group)
-      // 立即发送后，队列用户之前的 assistant 属于上一回合；
+      // Pi 实际消费新指令后，其 user 之前的 assistant 才属于上一回合；
       // 只有新用户之后的 assistant 才能收起新回合占位。
       && (queuedUserGroupIndex == null || index > queuedUserGroupIndex)
     )
     : (liveMessages != null && liveMessages.some((m) => (m as { type: string }).type === 'assistant'))
   const shouldRenderStreamingFallback = !hasLiveAssistantContent
     && !suppressAgentRunning
-    && (streaming || smoothContent || retrying)
+    && (
+      smoothFallbackTurn != null
+      || retrying != null
+      || (!hasPendingInteraction && streaming)
+    )
   const streamingFallbackInsertionIndex = shouldRenderStreamingFallback
     ? (queuedUserGroupIndex != null ? queuedUserGroupIndex + 1 : visibleGroups.length)
     : undefined
@@ -724,7 +776,7 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
       ) : (
         <Message from="assistant">
           <MessageContent className="pl-0">
-            {streaming && (
+            {streaming && !suppressWaitingFeedback && (
               <AgentRunningIndicator
                 startedAt={startedAt}
                 model={streamingModelId}
@@ -742,6 +794,7 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
   const lastUserGroupIndex = visibleGroups.findLastIndex((group) => group.type === 'user')
   const lastAssistantGroupIndex = visibleGroups.findLastIndex((group) => group.type === 'assistant-turn')
   const showStoppedWithoutAssistant = !streaming
+    && !immediateUserMessages?.length
     && isStoppedByUser
     && lastUserGroupIndex >= 0
     && lastAssistantGroupIndex < lastUserGroupIndex
@@ -802,14 +855,19 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
     <BasePathsProvider basePaths={attachedDirs}>
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
       <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
-        <AgentConversationScrollController />
+        <AgentConversationScrollController submittedMessageId={lastUserGroupIndex >= 0 ? getGroupId(visibleGroups[lastUserGroupIndex]!) : undefined} />
         <ScrollPositionManager id={sessionId} ready={ready} />
         {/* contentOffsetX 无 CSS transition：只跟随真实容器宽度，与 Chat/侧栏 CSS 同帧 */}
         <ConversationContent
           style={{ transform: contentOffsetX ? `translateX(${contentOffsetX}px)` : undefined }}
         >
-          {!hasContent && !streaming && !waitingForQueuedRun ? (
-            <EmptyState />
+          {!hasContent && !streaming && !waitingForQueuedRun && !hasTailCompactionStatus ? (
+            messagesLoaded !== false && (
+              <AgentWelcomeScreen
+                projectName={projectName}
+                onSelectPrompt={onSelectWelcomePrompt}
+              />
+            )
           ) : (
             <>
               {/* 统一消息渲染（持久化 + 实时合并为一个列表，确保 system 消息位置正确） */}
@@ -865,6 +923,20 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
                       sessionModelId={sessionModelId}
                       sessionId={sessionId}
                       isLatestAssistantTurn={isLatestAssistantTurn}
+                      backgroundWaiting={streamState?.backgroundWaiting}
+                      pendingUserMessage={
+                        group.type === 'user'
+                        && group.message.uuid != null
+                        && pendingImmediateUserIds.has(group.message.uuid)
+                      }
+                      suppressWaitingFeedback={suppressWaitingFeedback}
+                      compactionStatusOverride={
+                        contextCompaction?.status === 'stopped'
+                        && contextCompaction.placement === 'history'
+                        && idx === latestCompactionGroupIndex
+                          ? 'stopped'
+                          : undefined
+                      }
                       // 中断后 isLive=false，但仍需 startedAt / duration 才能显示「你在 N 秒后停止了」
                       runningStartedAt={
                         isLive || turnStoppedByUser
@@ -887,6 +959,7 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
                 <Message from="assistant">
                   <MessageContent className="pl-0">
                     <AgentTurnStatusLine
+                      compact
                       model={sessionModelId}
                       status="stopped"
                       durationMs={stoppedDurationMs}
@@ -895,10 +968,9 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
                 </Message>
               )}
 
-              {/* 压缩进行中：钉在列表末尾显示 spinner。
-                  完成态必须走消息流中的 compact_boundary 位置渲染，
-                  否则会出现「模型正文 → 已自动压缩」的倒置顺序。 */}
-              {contextCompaction?.status === 'running' && (
+              {/* 进行中或缺少可持久化 system 消息的终态：在正文起点显示同款简洁状态行。
+                  已有 system 终态必须原位渲染，避免列表末尾再出现重复状态。 */}
+              {contextCompaction?.placement === 'tail' && (
                 <CompactionInlineLine progress={contextCompaction} />
               )}
 
@@ -913,7 +985,10 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
 
               {/* 暂停后的下一条消息已进入队列：旧 Runtime 收尾期间持续显示处理中，
                   但不把旧流重新标记为 running，避免误走 Runtime 注入通道。 */}
-              {waitingForQueuedRun && !streaming && (
+              {waitingForQueuedRun
+                && !streaming
+                && !immediateUserMessages
+                && !suppressWaitingFeedback && (
                 <Message from="assistant">
                   <MessageContent className="pl-0">
                     <AgentRunningIndicator
@@ -928,8 +1003,10 @@ export function AgentMessages({ sessionId, contentOffsetX = 0, sessionModelId, m
           )}
         </ConversationContent>
         <ScrollMinimap items={minimapItems} />
+        <AgentConversationScrollButton />
         {allUserMessagesData.length > 0 && (
           <StickyUserMessage
+            variant="agent"
             userMessages={allUserMessagesData}
             contentOffsetX={contentOffsetX}
           />

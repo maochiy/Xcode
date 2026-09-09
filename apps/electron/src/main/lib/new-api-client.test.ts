@@ -63,7 +63,7 @@ describe('NewApiClient 账号密码登录', () => {
     const resolvedKey = await client.getOrCreateApiKey({
       user: { id: 7, username: 'alice' },
       accessToken: 'management-token',
-    }, 'ccb · Proma Desktop', 'ccb')
+    }, 'ccb · Xcode Desktop', 'ccb')
 
     expect(resolvedKey).toEqual({
       apiKey: 'sk-existing-ccb-key',
@@ -132,13 +132,13 @@ describe('NewApiClient 账号密码登录', () => {
     const session = await client.loginWithPassword('alice', 'secret')
     const createdKey = await client.getOrCreateApiKey(
       session,
-      'ccb · Proma Desktop',
+      'ccb · Xcode Desktop',
       'ccb',
     )
 
     expect(session.user.displayName).toBe('Alice')
     expect(createdKey).toEqual({ apiKey: 'sk-proma', tokenId: 19, created: true })
-    expect(createdTokenName).toMatch(/^ccb · Proma Desktop · [a-f0-9]{8}$/)
+    expect(createdTokenName).toMatch(/^ccb · Xcode Desktop · [a-f0-9]{8}$/)
     expect(requests[0]?.url).toBe('https://new-api.example.com/prefix/api/user/login')
     expect(requests[1]?.url).toContain('https://new-api.example.com/prefix/api/token/?')
     expect(requests[2]?.url).toBe('https://new-api.example.com/prefix/api/token/')
@@ -170,7 +170,7 @@ describe('NewApiClient 账号密码登录', () => {
     const createdKey = await client.getOrCreateApiKey({
       user: { id: 1, username: 'legacy' },
       accessToken: 'management-token',
-    }, 'ccb · Proma Desktop', 'ccb')
+    }, 'ccb · Xcode Desktop', 'ccb')
 
     expect(createdKey).toEqual({ apiKey: 'sk-legacy-key', created: true })
     expect(requestCount).toBe(2)
@@ -234,7 +234,7 @@ describe('NewApiClient 账号密码登录', () => {
     const resolvedKey = await client.getOrCreateApiKey({
       user: { id: 7, username: 'alice' },
       accessToken: 'management-token',
-    }, 'ccb · Proma Desktop', 'ccb')
+    }, 'ccb · Xcode Desktop', 'ccb')
 
     expect(resolvedKey).toEqual({
       apiKey: 'sk-new-ccb-key',
@@ -292,7 +292,7 @@ describe('NewApiClient 账号密码登录', () => {
     const resolvedKey = await client.getOrCreateApiKey({
       user: { id: 7, username: 'alice' },
       accessToken: 'management-token',
-    }, 'ccb · Proma Desktop', 'ccb')
+    }, 'ccb · Xcode Desktop', 'ccb')
 
     expect(resolvedKey).toEqual({
       apiKey: 'sk-second-page-key',
@@ -345,7 +345,7 @@ describe('NewApiClient 账号密码登录', () => {
     await expect(client.getOrCreateApiKey({
       user: { id: 7, username: 'alice' },
       accessToken: 'management-token',
-    }, 'ccb · Proma Desktop', 'ccb')).rejects.toThrow('令牌不存在')
+    }, 'ccb · Xcode Desktop', 'ccb')).rejects.toThrow('令牌不存在')
 
     expect(deletedTokenId).toBe(31)
   })

@@ -254,7 +254,7 @@ export function GeneralSettings(): React.ReactElement {
           />
           <SettingsToggle
             label="Git/PR 标识"
-            description="Agent 代你提交 commit 或创建 PR 时，附加 Made-with: Proma 与官网链接，便于推广；可随时关闭"
+            description="Agent 代你提交 commit 或创建 PR 时，附加 Made-with: Xcode 与项目仓库链接，便于推广；可随时关闭"
             checked={gitAttributionEnabled}
             onCheckedChange={(checked) => {
               void handleGitAttributionChange(checked)

@@ -26,17 +26,28 @@ export type PlatformArch =
   | 'linux-x64'
   | 'win32-x64'
 
-/** Proma 统一管理的 Runtime。 */
+/**
+ * Proma 历史上识别过的 Runtime。
+ *
+ * 该联合类型暂时保留用于读取旧配置、旧会话和旧任务记录；当前可执行内核请使用
+ * ExecutableRuntimeId，避免把 legacy 标识重新暴露为可选或可执行项。
+ */
 export type RuntimeId = 'pi' | 'hermes' | 'codex' | 'claude'
 
-/** 被 Pi/Hermes 策略调度的外部 Harness。 */
+/** Proma 当前唯一允许执行的新 Runtime。 */
+export type ExecutableRuntimeId = 'pi'
+
+/** 历史上被策略调度过的外部 Harness，仅用于兼容读取。 */
 export type RoutedHarnessId = 'codex' | 'claude'
 
-/** Pi/Hermes 是主内核，Codex/Claude Code 只作为被策略调度的 Harness。 */
+/** 历史 Runtime 角色分类，仅用于兼容已有注册表数据。 */
 export type RuntimeRole = 'kernel' | 'routed-harness'
 
-/** Runtime 的 Harness 标识。native 是 Pi 主内核的兼容别名。 */
+/** Runtime 的历史 Harness 标识。native 是 Pi 主内核的兼容别名。 */
 export type HarnessId = 'native' | RuntimeId
+
+/** Proma 当前唯一允许执行的新 Harness。 */
+export type ExecutableHarnessId = 'pi'
 
 /** Runtime 能力键，来源于统一 Runtime Capability 模型。 */
 export type RuntimeCapability =
@@ -740,6 +751,8 @@ export const IPC_CHANNELS = {
   SCAN_EDITORS: 'shell:scan-editors',
   /** 查询某个文件在本机系统中的默认打开应用信息（带图标） */
   GET_DEFAULT_APP_FOR_FILE: 'shell:get-default-app-for-file',
+  /** 查询某个文件在本机可用来打开的应用列表（带图标） */
+  GET_APPS_FOR_FILE: 'shell:get-apps-for-file',
   /** 打开独立预览窗口 */
   OPEN_DETACHED_PREVIEW: 'preview:open-detached',
   /** 获取独立预览窗口数据 */

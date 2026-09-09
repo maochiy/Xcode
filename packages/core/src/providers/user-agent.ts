@@ -1,4 +1,4 @@
-const PROMA_REPO_URL = 'https://github.com/ErlichLiu/Proma'
+const PROMA_REPO_URL = 'https://github.com/maochiy/Xcode'
 
 let _promaVersion = '0.0.0'
 
@@ -12,5 +12,5 @@ export function getPromaVersion(): string {
 
 export function getPromaUserAgent(version?: string): string {
   const v = version ?? _promaVersion
-  return `Proma/${v} (+${PROMA_REPO_URL})`
+  return `Xcode/${v} (+${PROMA_REPO_URL})`
 }

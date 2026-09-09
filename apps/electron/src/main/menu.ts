@@ -1,4 +1,5 @@
 import { Menu, shell, BrowserWindow } from 'electron'
+import { APP_DISPLAY_NAME } from './lib/app-branding'
 
 export function createApplicationMenu(): Menu {
   const isMac = process.platform === 'darwin'
@@ -16,17 +17,17 @@ export function createApplicationMenu(): Menu {
     ...(isMac
       ? [
           {
-            label: 'Proma',
+            label: APP_DISPLAY_NAME,
             submenu: [
-              { role: 'about' as const, label: '关于 Proma' },
+              { role: 'about' as const, label: `关于 ${APP_DISPLAY_NAME}` },
               { type: 'separator' as const },
               { role: 'services' as const, label: '服务' },
               { type: 'separator' as const },
-              { role: 'hide' as const, label: '隐藏 Proma' },
+              { role: 'hide' as const, label: `隐藏 ${APP_DISPLAY_NAME}` },
               { role: 'hideOthers' as const, label: '隐藏其他' },
               { role: 'unhide' as const, label: '显示全部' },
               { type: 'separator' as const },
-              { role: 'quit' as const, label: '退出 Proma' },
+              { role: 'quit' as const, label: `退出 ${APP_DISPLAY_NAME}` },
             ],
           },
         ]

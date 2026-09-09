@@ -785,7 +785,7 @@ export function SidePanel({
                         onReferenceFiles={handleSessionFilesAttached}
                         onAddDirectories={handleSessionDirectoriesDropped}
                       >
-                        <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto">
+                        <div className="hover-scrollbar-xy min-h-0 min-w-0 flex-1">
                           {attachedFiles.length > 0 && (
                             <AttachedFilesSection
                               attachedFiles={attachedFiles}
@@ -876,7 +876,7 @@ export function SidePanel({
                       onReferenceFiles={handleWorkspaceFilesAttached}
                       onAddDirectories={handleWorkspaceDirectoriesDropped}
                     >
-                      <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto pb-1">
+                      <div className="hover-scrollbar-xy min-h-0 min-w-0 flex-1 pb-1">
                         {wsAttachedFiles.length > 0 && (
                           <AttachedFilesSection
                             attachedFiles={wsAttachedFiles}
@@ -918,27 +918,22 @@ export function SidePanel({
           )}
 
           {/* 常驻浏览器层：始终挂载，但不参与 flex 高度分配；固定定位在 34px Tab 栏下方。
-              launcherVisible 时当前会话无任何 Tab，容器用 display:none 让位给启动页；
-              Electron webview display:none 不销毁 guest、保留页面状态，仅不可见。 */}
+              非浏览器 Tab 必须用 display:none。visibility/opacity/pointer-events 挡不住
+              Electron webview 的原生合成层，会把文件列表的点击和滚动全部吞掉。 */}
           <div
             className={cn(
               'absolute inset-x-0 bottom-0 z-[1]',
-              launcherVisible ? 'hidden' : 'block',
+              !launcherVisible && isActiveBrowserTab ? 'block' : 'hidden',
             )}
             // macOS 只有 Tab 栏；Windows 还需要避开面板顶部的标题栏预留区。
             style={{ top: isWindows ? 68 : 34 }}
           >
             {/* 每个会话的每个浏览器 Tab（静态/实例/任务）独立挂载一个 webview，
-                始终不卸载；仅当前会话的激活浏览器 Tab 显示，其余 CSS 隐藏。
+                始终不卸载；仅当前会话的激活浏览器 Tab 显示，其余 display:none。
                 切换会话 / 切换 Tab / 面板开合都不会重建 webview，已打开的页面不会重新加载。
                 每个会话使用独立 partition（Cookie/localStorage/缓存隔离）。 */}
             <div
-              className={cn(
-                'absolute inset-0 z-[1] flex min-h-0 flex-col bg-background',
-                isActiveBrowserTab
-                  ? 'visible opacity-100'
-                  : 'invisible opacity-0 pointer-events-none',
-              )}
+              className="absolute inset-0 z-[1] flex min-h-0 flex-col bg-background"
               data-persistent-browser-layer
             >
               {browserTabs.map(({ sessionId: tabSessionId, tab }) => {
@@ -954,7 +949,7 @@ export function SidePanel({
                     key={`${tabSessionId}:${tab}`}
                     className={cn(
                       'absolute inset-0 flex min-h-0 flex-col bg-background',
-                      active ? 'visible opacity-100' : 'invisible opacity-0 pointer-events-none',
+                      active ? 'block' : 'hidden',
                     )}
                     data-persistent-browser-instance={`${tabSessionId}:${tab}`}
                   >
@@ -1069,12 +1064,12 @@ function AttachedFilesSection({ attachedFiles, onDetach, onAddToChat, onFilePrev
         return (
           <div
             key={filePath}
-            className="flex items-center gap-1 py-1 pl-2 pr-2 text-sm cursor-pointer hover:bg-accent/50 group mx-2 rounded-lg"
+            className="flex w-max min-w-full items-center gap-1 py-1 pl-2 pr-2 text-sm cursor-pointer hover:bg-accent/50 group mx-2 rounded-lg"
             onClick={() => onFilePreview?.(filePath)}
           >
             <span className="w-3.5 flex-shrink-0" />
             <FileTypeIcon name={name} isDirectory={false} />
-            <span className="text-xs truncate flex-1" title={filePath}>{name}</span>
+            <span className="shrink-0 text-xs whitespace-nowrap" title={filePath}>{name}</span>
             <div
               className="flex-shrink-0 mr-1"
               onClick={(e) => e.stopPropagation()}
@@ -1309,11 +1304,11 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
   const isSticky = expanded
 
   return (
-    <div className="relative">
+    <div className="relative w-max min-w-full">
       <div
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
-          'file-tree-row relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group',
+          'file-tree-row relative flex h-8 w-max min-w-full items-center gap-1 pr-2 text-sm cursor-pointer group',
           isSticky && cn(STICKY_ROW_BASE_CLASS, 'top-0 z-10'),
         )}
         style={{ paddingLeft }}
@@ -1334,7 +1329,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
           )}
         />
         <FileTypeIcon name={dirName} isDirectory isOpen={expanded} className="relative z-10" />
-        <span className="relative z-10 text-xs truncate flex-1" title={dirPath}>
+        <span className="relative z-10 text-xs whitespace-nowrap flex-1" title={dirPath}>
           {dirName}
         </span>
         <Button
@@ -1541,7 +1536,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
         ref={rowRef}
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
-          'file-tree-row relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group',
+          'file-tree-row relative flex h-8 w-max min-w-full items-center gap-1 pr-2 text-sm cursor-pointer group',
           isSticky && STICKY_ROW_BASE_CLASS,
         )}
         style={{
@@ -1594,7 +1589,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span className="relative z-10 truncate text-xs flex-1">{currentName}</span>
+          <span className="relative z-10 shrink-0 whitespace-nowrap text-xs">{currentName}</span>
         )}
 
         {/* 右侧操作按钮占位 */}

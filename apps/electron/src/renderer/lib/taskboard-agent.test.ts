@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import type { SDKMessage, Task } from '@proma/shared'
+import type {
+  AgentRuntimeModelCatalog,
+  Channel,
+  SDKMessage,
+  Task,
+} from '@proma/shared'
 import {
+  buildTaskboardModelOptions,
   buildTaskRunInput,
   buildTaskRunPrompt,
   extractTaskBlockedReason,
@@ -62,7 +68,50 @@ const sampleTask: Task = {
   updatedAt: '2026-01-01T00:00:00.000Z',
 }
 
+const runtimeCatalog: AgentRuntimeModelCatalog = {
+  channelId: 'anthropic-channel',
+  models: [{
+    value: 'claude-sonnet',
+    displayName: 'Claude Sonnet',
+    description: '',
+    contextWindow: 200_000,
+    supportsEffort: false,
+    supportedEffortLevels: [],
+    supportsAdaptiveThinking: false,
+    supportsFastMode: false,
+    supportsAutoMode: false,
+  }],
+  contextPolicy: {
+    autoCompactEnabled: true,
+    models: [],
+  },
+}
+
+const anthropicChannel: Channel = {
+  id: 'anthropic-channel',
+  name: 'Anthropic',
+  provider: 'anthropic',
+  apiKey: '',
+  baseUrl: 'https://api.anthropic.com',
+  models: [{ id: 'claude-sonnet', name: 'Claude Sonnet', enabled: true }],
+  enabled: true,
+  createdAt: 1,
+  updatedAt: 1,
+}
+
 describe('taskboard-agent 联动工具', () => {
+  test('Given 任务看板选择 Anthropic 模型 When 构建 Pi 模型选项 Then 保留 Provider 协议', () => {
+    const options = buildTaskboardModelOptions({
+      channelId: anthropicChannel.id,
+      catalog: runtimeCatalog,
+      channels: [anthropicChannel],
+    })
+
+    expect(options).toHaveLength(1)
+    expect(options[0]?.provider).toBe('anthropic')
+    expect(options[0]?.runtimeModelInfo?.value).toBe('claude-sonnet')
+  })
+
   test('Given 任务 When 构建运行提示词 Then 包含标题与描述', () => {
     const prompt = buildTaskRunPrompt(sampleTask)
     expect(prompt).toContain('修复登录 bug')

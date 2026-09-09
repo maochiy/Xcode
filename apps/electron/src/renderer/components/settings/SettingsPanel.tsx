@@ -26,7 +26,6 @@ import {
   HardDrive,
   Archive,
   Search,
-  Cpu,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
@@ -59,7 +58,6 @@ import { ShortcutSettings } from "./ShortcutSettings";
 import { VoiceInputSettings } from "./VoiceInputSettings";
 import { MigrationSettings } from "./MigrationSettings";
 import { StorageSettings } from "./StorageSettings";
-import { RuntimeSettings } from "./RuntimeSettings";
 import { ArchivedChatsSettings } from "./ArchivedChatsSettings";
 
 /** 设置 Tab 定义 */
@@ -78,10 +76,10 @@ interface TabGroup {
 const BASE_TABS: TabItem[] = [
   { id: "profile", label: "个人资料", icon: <CircleUser size={16} /> },
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
+  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
-  { id: "runtime", label: "Runtime 中心", icon: <Cpu size={16} /> },
 ];
 
 const TOOLS_TAB: TabItem = {
@@ -96,7 +94,7 @@ const BOTS_TAB: TabItem = {
 };
 const TUTORIAL_TAB: TabItem = {
   id: "tutorial",
-  label: "Proma 教程",
+  label: "Xcode 教程",
   icon: <GraduationCap size={16} />,
 };
 const SHORTCUTS_TAB: TabItem = {
@@ -115,13 +113,12 @@ const TAIL_TABS: TabItem[] = [
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
   { id: "archived-chats", label: "已归档的聊天", icon: <Archive size={16} /> },
-  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
 const TAB_GROUPS: TabGroup[] = [
   {
-    label: "Proma",
+    label: "Xcode",
     tabs: BASE_TABS,
   },
   {
@@ -153,8 +150,6 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <PromptSettings />;
     case "proxy":
       return <ProxySettings />;
-    case "runtime":
-      return <RuntimeSettings />;
     case "tools":
       return <ToolSettings />;
     case "appearance":
@@ -222,7 +217,7 @@ export function SettingsPanel({
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */
   const handleTabChange = (tabId: SettingsTab): void => {
     if (tabId === 'tutorial') {
-      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Proma 使用教程' })
+      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Xcode 使用教程' })
       setMainTabs(result.tabs)
       setMainActiveTabId(result.activeTabId)
       // Skills/Automations 会全屏覆盖 TabContent；打开教程时先清理表单并回到会话视图。

@@ -10,7 +10,7 @@ import { agentRuntimeExecutionGraphsAtom } from '@/atoms/agent-atoms'
 import { ContentBlock } from './ContentBlock'
 
 describe('ContentBlock Collaboration 结果摘要', () => {
-  test('Given 已完成 thinking 活动 When 渲染 Then 思考面板自动隐藏', () => {
+  test('Given 已完成 thinking 活动 When 渲染 Then 显示默认收起的已思考入口', () => {
     const block: SDKThinkingBlock = {
       type: 'thinking',
       thinking: '正在核对登录流程。',
@@ -21,16 +21,14 @@ describe('ContentBlock Collaboration 结果摘要', () => {
       </Provider>,
     )
 
-    expect(html).not.toContain('data-agent-activity="thinking"')
+    expect(html).toContain('data-agent-timeline-entry="thinking"')
+    expect(html).toContain('已思考')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('正在核对登录流程')
-    expect(html).not.toContain('data-thinking-icon="true"')
-    expect(html).not.toContain('data-collapse-chevron="right"')
-    expect(html).not.toContain('aria-expanded')
-    expect(html).not.toContain('Thinking')
-    expect(html).not.toContain('stroke-dasharray')
+    expect(html).not.toContain('data-agent-thinking-content')
   })
 
-  test('Given 运行中 thinking 已有内容 When 渲染 Then 固定高度常显且带阴影滚动区', () => {
+  test('Given 运行中 thinking 已有内容 When 渲染 Then 原文直接可见且不显示折叠按钮', () => {
     const block: SDKThinkingBlock = {
       type: 'thinking',
       thinking: '正在核对登录流程。',
@@ -46,15 +44,39 @@ describe('ContentBlock Collaboration 结果摘要', () => {
       </Provider>,
     )
 
-    expect(html).toContain('正在思考')
+    expect(html).toContain('data-agent-timeline-entry="thinking"')
+    expect(html).toContain('data-agent-thinking-content')
     expect(html).toContain('正在核对登录流程')
-    expect(html).not.toContain('data-thinking-icon="true"')
-    expect(html).not.toContain('data-collapse-chevron="right"')
-    expect(html).toContain('data-thinking-scroll-viewport="true"')
-    expect(html).toContain('agent-thinking-stream-surface')
-    expect(html).toContain('h-36')
-    expect(html).not.toContain('max-h-0')
-    expect(html).toContain('agent-activity-fade-in')
+    expect(html).toContain('text-muted-foreground')
+    expect(html).toContain('role="status"')
+    expect(html.match(/正在思考/g)).toHaveLength(1)
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('aria-expanded')
+  })
+
+  test('Given 运行中 thinking 尚无内容 When 渲染 Then 只显示一个无折叠按钮的正在思考状态', () => {
+    const block: SDKThinkingBlock = {
+      type: 'thinking',
+      thinking: '',
+    }
+    const html = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <ContentBlock
+          block={block}
+          allMessages={[]}
+          activityRunning
+          activityItem
+        />
+      </Provider>,
+    )
+
+    expect(html).toContain('role="status"')
+    expect(html.match(/正在思考/g)).toHaveLength(1)
+    expect(html).toContain('agent-status-shimmer')
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('aria-expanded')
+    expect(html).not.toContain('data-agent-timeline-entry')
+    expect(html).not.toContain('data-agent-thinking-content')
   })
 
   test('Given 普通工具阶段行 When 渲染 Then 使用纯淡入入场动画', () => {
@@ -114,6 +136,36 @@ describe('ContentBlock Collaboration 结果摘要', () => {
 
     expect(html).toContain('data-agent-activity="tool"')
     expect(html).not.toContain('agent-status-shimmer')
+  })
+
+  test('Given Pi 原生 read 与 bash 工具 When 渲染活动详情 Then 使用标准工具语义展示参数', () => {
+    const readBlock: SDKToolUseBlock = {
+      type: 'tool_use',
+      id: 'pi-read',
+      name: 'read',
+      input: { path: '/tmp/pi-native.ts', offset: 10, limit: 20 },
+    }
+    const bashBlock: SDKToolUseBlock = {
+      type: 'tool_use',
+      id: 'pi-bash',
+      name: 'bash',
+      input: { command: 'bun test SDKMessageRenderer.test.tsx' },
+    }
+    const readHtml = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <ContentBlock block={readBlock} allMessages={[]} activityItem />
+      </Provider>,
+    )
+    const bashHtml = renderToStaticMarkup(
+      <Provider store={createStore()}>
+        <ContentBlock block={bashBlock} allMessages={[]} activityItem />
+      </Provider>,
+    )
+
+    expect(readHtml).toContain('已读取pi-native.ts 第 10-30 行')
+    expect(readHtml).toContain('data-agent-activity="tool"')
+    expect(bashHtml).toContain('已运行 bun test SDKMessageRenderer.test.tsx')
+    expect(bashHtml).toContain('data-agent-activity="tool"')
   })
 
   test('Given list_delegations 返回完整委派数据 When 渲染正文 Then 只显示一句状态摘要', () => {

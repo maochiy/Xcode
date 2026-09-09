@@ -53,10 +53,15 @@ class PromaBuiltinMcpHttpHost {
     sessionId: string,
     configs: Record<string, Record<string, unknown>>,
   ): Promise<Record<string, Record<string, unknown>>> {
+    const entries = Object.entries(configs)
+    if (!entries.some(([, config]) => isBuiltinMcpServerDefinition(config))) {
+      return Object.fromEntries(entries)
+    }
+
     await this.ensureStarted()
     const result: Record<string, Record<string, unknown>> = {}
 
-    for (const [name, config] of Object.entries(configs)) {
+    for (const [name, config] of entries) {
       if (!isBuiltinMcpServerDefinition(config)) {
         result[name] = config
         continue
