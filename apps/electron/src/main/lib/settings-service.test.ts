@@ -25,12 +25,12 @@ let settingsPath: string
 
 beforeAll(() => {
   tempHome = mkdtempSync(join(tmpdir(), 'proma-settings-service-'))
-  settingsPath = join(tempHome, '.proma-dev', 'settings.json')
+  settingsPath = join(tempHome, 'xcodes-dev', 'settings.json')
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma-dev'), { recursive: true, force: true })
-  mkdirSync(join(tempHome, '.proma-dev'), { recursive: true })
+  rmSync(join(tempHome, 'xcodes-dev'), { recursive: true, force: true })
+  mkdirSync(join(tempHome, 'xcodes-dev'), { recursive: true })
 })
 
 afterAll(() => {
@@ -70,6 +70,33 @@ function runSettingsService(expression: string): AppSettings {
 }
 
 describe('应用主题设置持久化', () => {
+  test('Given 旧配置保存白色图标 When 读取 Then 移除废弃配色且保留其他设置', () => {
+    writeFileSync(settingsPath, JSON.stringify({
+      themeMode: 'dark',
+      themeStyle: 'default',
+      appIconVariant: 'white',
+      notificationsEnabled: false,
+      marker: 'preserved',
+    }), 'utf-8')
+
+    const settings = runSettingsService('service.getSettings()')
+    expect(settings).not.toHaveProperty('appIconVariant')
+    expect(settings.notificationsEnabled).toBe(false)
+    const saved = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+    expect(saved).not.toHaveProperty('appIconVariant')
+    expect(saved.marker).toBe('preserved')
+  })
+
+  test('Given 旧客户端提交图标配色 When 更新设置 Then 不再保存或返回废弃字段', () => {
+    const updated = runSettingsService(`service.updateSettings({
+      appIconVariant: 'white',
+      notificationsEnabled: false,
+    })`)
+    expect(updated).not.toHaveProperty('appIconVariant')
+    expect(updated.notificationsEnabled).toBe(false)
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8'))).not.toHaveProperty('appIconVariant')
+  })
+
   test('Given 配置文件不存在 When 读取 Then 返回 Cursor Dark 默认配置', () => {
     expect(runSettingsService('service.getSettings()')).toMatchObject({
       themeMode: 'dark',

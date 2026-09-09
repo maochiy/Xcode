@@ -1,23 +1,27 @@
-# Proma
+# Xcode
 
-Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agent、工作区、Skills、MCP、远程机器人和记忆能力放在同一个开源客户端里。
+<img src="./apps/electron/resources/icon.svg" alt="Xcode 石墨黑圆润交叉图标" width="96" />
+
+Xcode 是一个本地优先的开源 AI 桌面应用，**基于 [Proma 开源版本](https://github.com/proma-ai/Proma) 进行二次开发**，把多模型 Chat、通用 Agent、工作区、Skills、MCP、远程机器人和记忆能力放在同一个客户端里。
 
 它不是只面向闲聊的聊天框，而是一个可以长期沉淀个人工作流的 Agent 工作台：简单问题用 Chat，复杂任务交给 Agent，数据和配置尽量留在本地。
 
-![Proma 海报](https://img.erlich.fun/personal-blog/uPic/pb.png)
+[English README](./README.en.md) | [新手教程（沿用 Proma 文档）](./tutorial/tutorial.md) | [下载 Xcode](https://github.com/maochiy/Xcode/releases) | [项目仓库](https://github.com/maochiy/Xcode)
 
-<video width="560" controls>
-  <source src="https://img.erlich.fun/personal-blog/uPic/%E7%AE%80%E5%8D%95%E4%BB%8B%E7%BB%8D%20Proma.mp4" type="video/mp4">
-</video>
+## 项目来源与关系
 
-[English README](./README.en.md) | [新手教程](./tutorial/tutorial.md) | [下载开源版](https://github.com/ErlichLiu/Proma/releases) | [下载商业版](https://proma.cool/download)
+- **上游项目**：[Proma](https://github.com/proma-ai/Proma)，由 Erlich Liu 及社区贡献者开发。感谢原项目提供的桌面应用架构与基础能力。
+- **本项目**：Xcode 是独立维护的衍生项目，在 Proma 开源代码基础上继续开发；不是从零实现，也不是 Proma 官方发行版或商业版。
+- **当前版本方向**：采用石墨黑圆润交叉图标，内置 Pi Runtime，并在 `maochiy/Xcode` 通过 GitHub Actions 构建和发布；首个版本为 `v0.0.1`。
+- **兼容性**：保留 `@proma/*` 内部包名、`proma` CLI、`~/.proma/` 数据路径及必要的旧身份标识，避免仅因更名破坏现有配置；这些不是遗漏的品牌替换。
+- **许可证与署名**：保留上游版权、许可证和贡献历史，继续采用仓库中的 [AGPL-3.0 许可证](./LICENSE)。
 
-> **最新思考 ｜ 2026 Q2–Q3**：[勇敢地解决真实的问题 — Proactive · 个人注意力 · 团队协作](./proma-thinking/proma-2026-q2-q3-thinking.md) ｜ 往期思考：[2026 Q1](./proma-thinking/proma-2026-q1-thinking.md)
+> 本项目与 Apple 的 Xcode 开发工具无关，也不隶属于 Apple。macOS 应用包名为 `Xcode-Desktop.app`，应用显示名称为 **Xcode**。
 
 ## 现在能做什么
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
-- **Agent 模式**：内置 Claude Agent SDK 与 Pi Agent SDK 两套运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。Claude 是默认内核，Pi 可在实验性设置中开启。
+- **Agent 模式**：内置 Pi Runtime，支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问；当前版本不再提供 Claude Agent SDK 内核切换。
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills & MCP**：每个工作区可以独立配置 Skills、MCP Server 和工作区文件，适合沉淀可复用能力。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
@@ -29,19 +33,27 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/ErlichLiu/Proma/releases) 下载开源版本，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包。
+从 [Xcode GitHub Releases](https://github.com/maochiy/Xcode/releases) 下载安装包。首版 [v0.0.1](https://github.com/maochiy/Xcode/releases/tag/v0.0.1) 提供：
 
-如果你希望开箱即用、减少 API 配置成本，也可以使用 [Proma 商业版](https://proma.cool/download)。商业版和开源版并行运行，主要区别是商业版提供内置渠道和订阅方案。
+- macOS Apple Silicon（arm64）：DMG / ZIP。
+- macOS Intel（x64）：DMG / ZIP。
+- Windows（x64）：EXE 安装程序。
+
+**安装前请注意：**
+
+- `v0.0.1` 安装包未配置开发者签名或 Apple 公证，请确认下载来源并留意系统安全提示。
+- macOS 使用 `Xcode-Desktop.app`，避免覆盖 Apple 的 `Xcode.app`。
+- 版本号在新仓库从 `0.0.1` 重新起步，旧 Proma 的较高版本不会自动降级到此版本，需要手动安装。
+- Xcode 保留 Proma 数据路径，默认不是与 Proma 完全隔离的数据副本；建议安装前备份 `~/.proma/`，不要同时操作同一份数据。
 
 ### 首次配置
 
-1. 打开 Proma，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
+1. 打开 Xcode，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
-4. 默认的 Claude Agent Runtime 需要 Anthropic 或 Anthropic 兼容协议渠道，例如 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan。
-5. Agent 输入框下方可直接切换 Claude / Pi 内核；Pi 可使用任意已启用的模型渠道。
-6. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。
-7. 如需记忆、联网搜索、飞书 / 钉钉 / 微信桥接，在设置页对应 Tab 中继续配置。
+4. Agent 使用内置 Pi Runtime，选择已启用且协议受支持的渠道与模型；不需要安装或切换 Claude Agent SDK。
+5. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。
+6. 如需记忆、联网搜索、飞书 / 钉钉 / 微信桥接，在设置页对应 Tab 中继续配置。
 
 ## 模式选择
 
@@ -62,6 +74,8 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 简单说：**只需要回答时用 Chat，需要行动和交付结果时用 Agent。**
 
 ## 截图
+
+> 以下截图沿用 Proma 阶段的历史素材，仅用于说明功能，不代表 Xcode 当前名称、图标或界面的最终样式。
 
 ### Chat 快速分析
 
@@ -87,41 +101,40 @@ Agent 在工作区里读取文件、推进任务、输出表格化结论，并�
 
 ![Proma MCP 配置](./docs/assets/screenshots/proma-mcp-demo.png)
 
-### 流式语音输入(支持全局输入)
-Proma 支持豆包的流式语音输入功能，并且支持在 Proma 内使用和 Proma 外部使用：
-- Proma 内部使用：Ctrl + ` 触发识别，再次按下结束自动输入到 Proma 内对应的输入框
-- Proma 外部使用：Ctrl + ` 触发识别，再次按下结束自动输入到当前的光标所在处，如无光标则默认写入到剪贴板
-- 
+### 流式语音输入（支持全局输入）
+
+Xcode 支持豆包的流式语音输入功能，并且支持在应用内和其他桌面应用中使用：
+
+- 应用内部：按 Ctrl + Backtick（反引号键）触发识别，再次按下结束并输入到 Xcode 内对应的输入框。
+- 应用外部：按同一快捷键触发识别，再次按下结束并输入到当前光标所在处；如无光标则写入剪贴板。
+
 ![Proma 语音输入](./docs/assets/screenshots/proma-typeless-input.png)
 
 ## Agent 运行时与模型渠道
 
-Proma 的 Agent 模式提供两套可切换的内核：
-
-- **Claude Agent Runtime（默认）**：基于 `@anthropic-ai/claude-agent-sdk`，使用 Anthropic Messages API 或兼容端点。
-- **Pi Agent Runtime**：基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Proma 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
+Xcode 的 Agent 模式统一使用 **Pi Runtime**，基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。支持 Anthropic 模型不等于内置 Claude Agent SDK。
 
 模型中心中选择的**供应商协议是 Runtime 的唯一协议来源**。普通 `openai`、`custom`、智谱 AI、豆包、通义千问等 OpenAI 兼容渠道固定使用 Chat Completions；只有明确选择 `openai-responses` 或 ChatGPT 订阅时才使用 Responses。Pi 不会根据模型名、Base URL 或 API Key 猜测协议。
 
-| 渠道类型 | Chat | Claude Agent | Pi Agent |
-| --- | --- | --- | --- |
-| Anthropic / Anthropic 兼容 | 支持 | 支持 | 支持 |
-| DeepSeek、Kimi API / Coding Plan、智谱 Coding Plan、MiniMax、小米 MiMo 等 Anthropic 协议渠道 | 支持 | 支持 | 支持 |
-| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 暂不支持 | 支持 |
-| OpenAI 兼容自定义端点 | 支持 | 暂不支持 | 支持 |
-| ChatGPT 订阅（Codex OAuth） | — | 支持 | 支持 |
+| 渠道类型 | Chat | Pi Agent |
+| --- | --- | --- |
+| Anthropic / Anthropic 兼容 | 支持 | 支持 |
+| DeepSeek、Kimi API / Coding Plan、智谱 Coding Plan、MiniMax、小米 MiMo 等 Anthropic 协议渠道 | 支持 | 支持 |
+| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 支持 |
+| OpenAI 兼容自定义端点 | 支持 | 支持 |
+| ChatGPT 订阅（Codex OAuth） | — | 支持 |
 
-> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换协议、渠道凭证或模型后，Pi 会从原生 Session 文件重建该 Session，不会删除或改写 Proma 中已保存的历史消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Proma 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
+> 切换协议、渠道凭证或模型后，Pi 会从原生 Session 文件重建该 Session，不会删除或改写 Xcode 中已保存的历史消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
 > Pi Worker 按 Runtime Build 共享：同一 Build 最多启动一个 Worker，在其中承载多个隔离 Session。Session 空闲 15 分钟后回收，每个 Build 最多保留 8 个空闲 Session；Worker 无 Session 60 秒后退出。工具请求始终携带 `sessionId`，避免共享 Worker 后串会话。
 
 > Agent 思考内容采用 Cursor 风格固定高度面板：模型返回的全部 thinking 原文按顺序持续追加，在过程正文阶段始终位于正文下方并默认自动滚动到最新内容；用户上滚后暂停跟随，可点击“回到最新”恢复。最终正文首个增量出现后隐藏思考区，让最终回答独立展示。思考与正文的累计 SSE 快照都会经过按字素逐帧追加的平滑队列，不再整块跳出。
 
-> **Kimi Coding Plan 用户须知**：Proma 已获得 Kimi 官方白名单支持，使用 Proma 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
+> 第三方订阅渠道的可用性及客户端授权以供应商规则为准。Xcode 不声称继承 Proma 的供应商白名单或商业授权。
 
 ## 本地数据
 
-Proma 采用本地文件存储，方便备份、迁移和排查问题。
+Xcode 采用本地文件存储，方便备份、迁移和排查问题。为保持既有数据兼容，目录仍为 `~/.proma/`。
 
 ```text
 ~/.proma/
@@ -143,19 +156,21 @@ Proma 采用本地文件存储，方便备份、迁移和排查问题。
 └── sdk-config/
 ```
 
-API Key 会通过 Electron `safeStorage` 加密后写入 `channels.json`。Proma 不使用本地数据库，核心数据结构以 JSON 配置和 JSONL 追加日志为主。
+API Key 会通过 Electron `safeStorage` 加密后写入 `channels.json`。Xcode 不使用本地数据库，核心数据结构以 JSON 配置和 JSONL 追加日志为主。
 
 ## 开发
 
-Proma 是 Bun workspace monorepo。
+Xcode 沿用 Proma 的 Bun workspace monorepo 结构和 `@proma/*` 内部包作用域。
 
 ```text
-proma-v2/
+Xcode/
 ├── packages/
 │   ├── shared/     # 共享类型、IPC 常量、配置、工具函数
 │   ├── core/       # Provider Adapter、SSE、代码高亮
+│   ├── session-core/ # 会话读取、分组、搜索与渲染核心
 │   └── ui/         # 共享 React UI 组件
 └── apps/
+    ├── cli/        # 兼容的 proma 命令行工具
     └── electron/   # Electron 桌面应用
 ```
 
@@ -163,14 +178,20 @@ proma-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@proma/electron` | `0.16.18` | Electron 桌面应用 |
-| `@proma/shared` | `0.1.70` | 共享类型、IPC 常量、配置和工具 |
-| `@proma/core` | `0.2.16` | Provider Adapter、SSE、Shiki 高亮 |
+| `@proma/electron` | `0.0.1` | Electron 桌面应用 |
+| `@proma/cli` | `0.1.0` | 兼容的 proma CLI |
+| `@proma/shared` | `0.1.72` | 共享类型、IPC 常量、配置和工具 |
+| `@proma/core` | `0.2.17` | Provider Adapter、SSE、Shiki 高亮 |
+| `@proma/session-core` | `0.1.6` | 会话核心能力 |
 | `@proma/ui` | `0.1.11` | 共享 React UI 组件 |
 
 常用命令：
 
 ```bash
+# 获取源码
+git clone https://github.com/maochiy/Xcode.git
+cd Xcode
+
 # 安装依赖
 bun install
 
@@ -217,11 +238,11 @@ bun run dist:fast
 | 代码高亮 | Shiki |
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
-| Agent Runtime | Claude: `@anthropic-ai/claude-agent-sdk@0.3.201`；Pi: `@earendil-works/pi-* @0.80.3` |
+| Agent Runtime | Pi：`@earendil-works/pi-* @0.80.9` |
 
 ## 架构概览
 
-Proma 的核心通信路径是：
+Xcode 的核心通信路径是：
 
 ```text
 shared 类型和 IPC 常量
@@ -233,7 +254,7 @@ shared 类型和 IPC 常量
 主进程服务集中在 `apps/electron/src/main/lib/`：
 
 - `agent-orchestrator.ts`：Agent 编排、运行时路由、环境变量、SDK 调用、事件流、错误处理。
-- `adapters/claude-agent-adapter.ts` / `adapters/pi-agent-adapter.ts`：Claude 与 Pi 运行时适配；`runtime-routing-agent-adapter.ts` 依据会话内核路由。
+- `runtime/pi-runtime-adapter.ts` / `runtime/frakio-pi-runtime-adapter.ts`：Pi 运行时适配；配合 `resources/pi-runtime/` 中的 Bridge / Worker 管理会话与事件。
 - `agent-session-manager.ts`：Agent 会话索引和 JSONL 消息持久化。
 - `agent-workspace-manager.ts`：工作区、MCP、Skills 和工作区文件管理。
 - `chat-service.ts`：Chat 流式调用、Provider Adapter、工具活动。
@@ -246,18 +267,24 @@ shared 类型和 IPC 常量
 
 ## 打包注意事项
 
-Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。`apps/electron` 的打包脚本会在 `electron-builder` 前执行 `bun run sync:runtime-deps`，把下列依赖及其运行时闭包复制到应用目录：
-
-- `@anthropic-ai/claude-agent-sdk`（包含按平台分发的 Claude native binary）
-- `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai`
-- Pi 运行时所需的原生模块和 `pdfjs-dist`
+当前版本仅打包 Pi Runtime。`bun run electron:build` 构建主进程、Preload、渲染进程、打包 Hooks 与自包含 `proma` CLI。`electron-builder.yml` 将 Pi Bridge / Worker、兼容补丁、CLI 和默认 Skills 作为资源打包，并将运行时依赖保留在 ASAR 外，供独立 Worker 解析。
 
 修改打包配置时，请确认：
 
-- `build:main` / `watch:main` 仍将两套 Agent SDK 标记为 external。
-- `scripts/sync-runtime-deps.ts` 的 external runtime 清单与实际依赖一致。
-- `electron-builder.yml` 保留 Claude binary 与 Pi native addon 的 `asarUnpack` 规则。
-- 在目标平台测试 `bun run dist:fast` 后，分别验证 Claude 与 Pi（若已启用）可以启动、调用工具和恢复会话。
+- `build:main` / `watch:main` 保留 `electron`、`node-pty` 的 external 配置。
+- `electron-builder.yml` 包含 Pi 运行时依赖、原生模块及所需 `asarUnpack` / `extraResources` 规则。
+- `scripts/electron-builder-after-pack.ts` 和 `scripts/electron-builder-after-sign.ts` 的 CLI 校验正常执行。
+- 在目标平台打包后，验证 Pi 可以启动、调用工具和恢复会话；仅构建成功不代表这些功能已验证。
+
+### GitHub Actions 发布
+
+[Release 工作流](./.github/workflows/release.yml) 支持推送 `v*` tag，或手动指定 `release_tag`：
+
+1. 校验仓库、应用名称和 tag 对应版本，运行类型检查与发布流程测试。
+2. 分别构建 macOS arm64、macOS x64 和 Windows x64。
+3. 汇总并校验安装包、blockmap 与自动更新清单，再正式发布 GitHub Release。
+
+后续版本的下载与自动更新均指向 `maochiy/Xcode`，不是 Proma 上游的发布渠道。
 
 更完整的工程约定见 [AGENTS.md](./AGENTS.md)。
 
@@ -275,23 +302,14 @@ Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。
 - 影响包行为时递增对应 package 的 patch 版本。
 - 能用测试覆盖的行为尽量补上测试，尤其是共享逻辑、IPC 契约和持久化格式。
 
-## 作者
+## 维护与原作者
 
-- 个人网站：[erlich.fun](https://erlich.fun)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=proma-ai%2Fproma&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&theme=dark&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
- </picture>
-</a>
-
+- Xcode 维护仓库：[maochiy/Xcode](https://github.com/maochiy/Xcode)。
+- Proma 原作者：Erlich Liu（[个人网站](https://erlich.fun)）及 [Proma 社区贡献者](https://github.com/proma-ai/Proma/graphs/contributors)。
 
 ## 致谢
 
+- [Proma](https://github.com/proma-ai/Proma)：本项目二次开发的代码基础，感谢原作者及所有贡献者。
 - [Shiki](https://shiki.style/)：代码高亮。
 - [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid) 与 [Mermaid](https://mermaid.js.org/)：Mermaid 图表渲染与官方兜底渲染。
 - [Cherry Studio](https://github.com/CherryHQ/cherry-studio)：多供应商桌面 AI 产品启发。
@@ -300,12 +318,6 @@ Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。
 
 ## 许可证
 
-Proma 社区版采用 [GNU Affero General Public License v3.0（AGPL-3.0）](./LICENSE) 开源，完整条款见根目录 `LICENSE` 文件。
+Xcode 基于 Proma 开源版本继续开发，沿用 [GNU Affero General Public License v3.0（AGPL-3.0）](./LICENSE)。原项目版权与许可证声明予以保留，完整条款以根目录 `LICENSE` 文件为准。
 
-**个人 / 非商业使用**：自由使用、修改、分发，仅需遵守 AGPL-3.0 条款。
-
-**商业使用**：在完全遵守 AGPL-3.0 条款的前提下允许进行商业使用，包括但不限于：以源代码或修改后的形式分发软件、通过网络对外提供服务时必须公开完整修改源码（含网络交互层）、衍生作品须以 AGPL-3.0 继续授权。
-
-**商业授权（豁免 AGPL-3.0 义务）**：如果你希望将 Proma 集成到闭源产品、对外提供 SaaS 服务但不想公开衍生代码，或有其他无法满足 AGPL-3.0 条款的商业场景，请通过邮件联系获取商业许可：[erlichliu@gmail.com](mailto:erlichliu@gmail.com)。
-
-向本项目提交 Pull Request 即视为同意将贡献以 AGPL-3.0 及未来商业许可形式授权给项目维护者。
+本项目不代表 Proma 原作者提供商业授权，也不因更名而改变上游代码的许可证。

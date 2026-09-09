@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url'
 import type {
   AgentProviderAdapter,
   AgentQueryInput,
+  AgentRuntimeToolPolicy,
   AgentRuntimeSessionOperationInput,
   SDKAssistantMessage,
   SDKContentBlock,
@@ -38,6 +39,10 @@ import { canonicalToolError, handlePromaCanonicalTool, isPromaCanonicalTool } fr
 import { isPromaProviderType, resolvePromaRuntimeApiMode } from './proma-runtime-api-mode'
 import type { PiAgentQueryOptions as PiRuntimeQueryOptions } from './pi-query-options'
 import { piApprovedToolInput, piPermissionTool } from './pi-tool-permission'
+import {
+  assertPiRuntimeToolAllowed,
+  isPiRuntimeGatewayAllowed,
+} from './pi-runtime-tool-policy'
 
 interface MessageQueue {
   iterable: AsyncIterable<SDKMessage>
@@ -76,6 +81,7 @@ interface PiRunState {
   lastUsage?: PiUsageSnapshot
   nativeTranscript?: boolean
   canUseTool?: PiRuntimeQueryOptions['canUseTool']
+  toolPolicy?: AgentRuntimeToolPolicy
   abortController?: AbortController
   consumedUserIds?: Set<string>
   onNativeMessage?: PiRuntimeQueryOptions['onNativeMessage']
@@ -986,6 +992,13 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         ? this.mcpBridges.get(sessionId)?.resolveToolCall(toolInput)
         : piPermissionTool(toolName, toolInput)
       if (!permissionTool) throw new Error('MCP 会话不可用，请重新发现目标工具。')
+      if (toolName === PI_MCP_DISCOVER_TOOL || toolName === PI_MCP_CALL_TOOL) {
+        if (!isPiRuntimeGatewayAllowed(run.toolPolicy, toolName)) {
+          throw new Error(`注册 Agent 不允许使用工具：${toolName}`)
+        }
+      } else {
+        assertPiRuntimeToolAllowed(run.toolPolicy, permissionTool.name)
+      }
       const result = await run.canUseTool(permissionTool.name, permissionTool.input, {
         signal: run.abortController.signal,
         toolUseID: String(params.toolCallId || ''),
@@ -1003,6 +1016,7 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         : result
     }
     if (isPromaCanonicalTool(name) && name !== PI_MCP_DISCOVER_TOOL && name !== PI_MCP_CALL_TOOL) {
+      assertPiRuntimeToolAllowed(run.toolPolicy, name)
       try {
         return await handlePromaCanonicalTool(name, params, {
           sessionId,
@@ -1015,12 +1029,20 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
     const mcpBridge = this.mcpBridges.get(sessionId)
     if (!mcpBridge) throw new Error(`Pi Session ${sessionId} 的 MCP 工具上下文不可用。`)
     if (name === PI_MCP_DISCOVER_TOOL) {
+      if (!isPiRuntimeGatewayAllowed(run.toolPolicy, name)) {
+        throw new Error(`注册 Agent 不允许使用工具：${name}`)
+      }
       if (params.server !== undefined && typeof params.server !== 'string') throw new Error('MCP server 必须为目录中的服务名称。')
       const server = params.server as string | undefined
       if (!server) return mcpBridge.discover()
       return formatPiMcpDiscoveryResult(server, await mcpBridge.discover(server))
     }
-    if (name === PI_MCP_CALL_TOOL) return mcpBridge.call(params)
+    if (name === PI_MCP_CALL_TOOL) {
+      if (!isPiRuntimeGatewayAllowed(run.toolPolicy, name)) {
+        throw new Error(`注册 Agent 不允许使用工具：${name}`)
+      }
+      return mcpBridge.call(params)
+    }
     throw new Error(`未注册的 Pi 外部工具：${name}。请通过 MCP 发现和调用入口使用。`)
   }
 
@@ -1210,7 +1232,7 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
       })
       // 首轮只配置服务目录；真正发现服务时才初始化，普通聊天不等待任何 MCP。
       const mcpBridge = this.mcpBridges.get(input.sessionId) || new PiMcpBridge()
-      mcpBridge.configure(input.mcpServers)
+      mcpBridge.configure(input.mcpServers, input.toolPolicy)
       const externalTools = PI_MCP_GATEWAY_TOOLS
       const workspaceSlug = input.contextPacket?.workspace?.slug || ''
       this.workspaceSlugs.set(input.sessionId, workspaceSlug)
@@ -1246,6 +1268,7 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         stream: createPiAssistantMessageStream(input.sessionId),
         settled: false,
         canUseTool: input.canUseTool,
+        toolPolicy: input.toolPolicy,
         abortController: new AbortController(),
         onNativeMessage: input.onNativeMessage,
       }
@@ -1281,6 +1304,8 @@ export class FrakioPiRuntimeAdapter implements AgentProviderAdapter {
         compactOnly: input.compactRequest === true,
         historyMessages: input.historyMessages,
         thinkingLevel: input.effortLevel || 'medium',
+        maxTurns: input.maxTurns,
+        toolPolicy: input.toolPolicy,
         // Proma MCP 工具（collaboration 子 Agent delegate_* 等）暴露给 Pi Worker。
         externalTools,
         mcpCatalog: mcpBridge.catalog(),

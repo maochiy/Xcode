@@ -10,6 +10,8 @@ import { z } from 'zod'
 import { isBuiltinMcpServerDefinition, isLazyBuiltinMcpServerDefinition } from '../builtin-mcp/tool-definition'
 import type { BuiltinMcpServerDefinition } from '../builtin-mcp/tool-definition'
 import { parsePiMcpCall, type PiExternalTool } from './pi-mcp-tools'
+import type { AgentRuntimeToolPolicy } from '@proma/shared'
+import { assertPiRuntimeToolAllowed, isPiRuntimeToolAllowed } from './pi-runtime-tool-policy'
 export type { PiExternalTool } from './pi-mcp-tools'
 
 interface McpServerConnection {
@@ -94,10 +96,15 @@ export class PiMcpBridge {
   private readonly servers = new Map<string, McpServerEntry>()
   private readonly closing = new Set<Promise<void>>()
   private disposed = false
+  private toolPolicy?: AgentRuntimeToolPolicy
 
   /** 只更新轻量目录；删除/变更配置立即使旧工具失效，不等待连接。 */
-  configure(mcpServers: Record<string, unknown> | undefined): void {
+  configure(
+    mcpServers: Record<string, unknown> | undefined,
+    toolPolicy?: AgentRuntimeToolPolicy,
+  ): void {
     if (this.disposed) throw new Error('Pi MCP 会话已关闭。')
+    this.toolPolicy = toolPolicy
     const next = new Set<string>()
     for (const [name, raw] of Object.entries(mcpServers || {})) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
@@ -134,7 +141,9 @@ export class PiMcpBridge {
     return [...this.servers].flatMap(([server, entry]) => entry.connection
       ? [{
           server,
-          tools: entry.connection.tools.map((tool) => ({
+          tools: entry.connection.tools.filter((tool) =>
+            isPiRuntimeToolAllowed(this.toolPolicy, tool.name),
+          ).map((tool) => ({
             ...tool,
             ...(tool.parameters ? { parameters: structuredClone(tool.parameters) } : {}),
           })),
@@ -160,7 +169,9 @@ export class PiMcpBridge {
       }).finally(() => { entry.pending = undefined })
       await entry.pending
     }
-    return entry.connection!.tools
+    return entry.connection!.tools.filter((tool) =>
+      isPiRuntimeToolAllowed(this.toolPolicy, tool.name),
+    )
   }
 
   /** 仅接受本会话已经发现的工具，返回真正参与审批的工具名和参数。 */
@@ -171,6 +182,7 @@ export class PiMcpBridge {
       throw new Error(`工具未发现或已失效，请先发现 MCP 服务：${call.server}`)
     }
     const originalName = connection.originalNames.get(call.tool)
+    assertPiRuntimeToolAllowed(this.toolPolicy, call.tool)
     const builtinTool = connection.builtin?.tools.find((tool) => tool.name === originalName)
     return {
       name: call.tool,

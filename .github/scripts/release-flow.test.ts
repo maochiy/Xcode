@@ -55,11 +55,11 @@ describe('release flow', () => {
 
     const macManifest = readFileSync(join(assetsDir, 'latest-mac.yml'), 'utf8')
     expect(macManifest).toContain('version: 0.0.1')
-    expect(macManifest).toContain('Xcode-0.0.1-mac-arm64.zip')
-    expect(macManifest).toContain('Xcode-0.0.1-mac-x64.zip')
+    expect(macManifest).toContain('xcodes-0.0.1-mac-arm64.zip')
+    expect(macManifest).toContain('xcodes-0.0.1-mac-x64.zip')
 
     const windowsManifest = readFileSync(join(assetsDir, 'latest.yml'), 'utf8')
-    expect(windowsManifest).toContain('Xcode-0.0.1-windows-x64.exe')
+    expect(windowsManifest).toContain('xcodes-0.0.1-windows-x64.exe')
   })
 
   test('拒绝缺失或多余的远端资产', () => {
@@ -81,6 +81,7 @@ describe('release flow', () => {
     expect(workflow).toContain('bun run typecheck')
     expect(workflow).toContain('bun test ./.github/scripts/release-flow.test.ts')
     expect(workflow).toContain('--publish never')
+    expect(workflow).not.toContain('--config.artifactName=')
     expect(workflow).toContain(
       'needs: [validate-release, quality-check, build-macos, build-windows]',
     )

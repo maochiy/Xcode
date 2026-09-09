@@ -7,7 +7,7 @@ const appDirectory = resolve(import.meta.dir, '..')
 const repositoryUrl = 'https://github.com/maochiy/Xcode'
 
 describe('Xcode 发布入口', () => {
-  test('Given 用户选择 Xcode When 读取应用与打包元数据 Then 显示名一致且应用包名称独立', () => {
+  test('Given 用户选择 Xcode When 读取应用与打包元数据 Then 显示名不变且安装产物使用 xcodes', () => {
     const metadata = JSON.parse(readFileSync(resolve(appDirectory, 'package.json'), 'utf8')) as {
       productName: string
       homepage: string
@@ -19,7 +19,9 @@ describe('Xcode 发布入口', () => {
     expect(metadata.repository.url).toBe(`${repositoryUrl}.git`)
     const builder = readFileSync(resolve(appDirectory, 'electron-builder.yml'), 'utf8')
     expect(builder).toContain('productName: Xcode')
-    expect(builder).toContain('executableName: Xcode-Desktop')
+    expect(builder).toContain('executableName: xcodes')
+    expect(builder).toContain('artifactName: xcodes-${version}-mac-${arch}.${ext}')
+    expect(builder).toContain('artifactName: xcodes-${version}-windows-${arch}.${ext}')
     expect(builder).toContain('owner: maochiy')
     expect(builder).toContain('repo: Xcode')
   })

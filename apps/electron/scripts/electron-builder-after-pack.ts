@@ -4,6 +4,11 @@ import { ensurePackagedBundledRuntimes } from './packaged-runtime-guard'
 interface ElectronBuilderAfterPackContext {
   appOutDir: string
   electronPlatformName: string
+  packager: {
+    appInfo: {
+      productFilename: string
+    }
+  }
 }
 
 /**
@@ -12,7 +17,11 @@ interface ElectronBuilderAfterPackContext {
  * - 全平台：smoke test `session list`，失败则中断打包
  */
 export function ensurePackagedCli(context: ElectronBuilderAfterPackContext): string {
-  return ensurePackagedPromaCli(context.appOutDir, context.electronPlatformName)
+  return ensurePackagedPromaCli(
+    context.appOutDir,
+    context.electronPlatformName,
+    { productName: context.packager.appInfo.productFilename },
+  )
 }
 
 /**
@@ -21,5 +30,9 @@ export function ensurePackagedCli(context: ElectronBuilderAfterPackContext): str
  */
 export default function afterPack(context: ElectronBuilderAfterPackContext): void {
   ensurePackagedCli(context)
-  ensurePackagedBundledRuntimes(context.appOutDir, context.electronPlatformName)
+  ensurePackagedBundledRuntimes(
+    context.appOutDir,
+    context.electronPlatformName,
+    context.packager.appInfo.productFilename,
+  )
 }

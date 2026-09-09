@@ -22,7 +22,7 @@
     },
     "apps/cli": {
       "name": "@proma/cli",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "proma": "./src/index.ts",
       },
@@ -36,7 +36,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.80.9",
@@ -185,7 +185,7 @@
     },
     "packages/shared": {
       "name": "@proma/shared",
-      "version": "0.1.72",
+      "version": "0.1.73",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

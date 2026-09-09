@@ -155,8 +155,7 @@ jobs:
           bunx electron-builder \
             --mac \
             --${{ matrix.arch }} \
-            --publish never \
-            --config.artifactName='Xcode-${version}-mac-${arch}.${ext}'
+            --publish never
         working-directory: apps/electron
 
       - name: 校验并整理 macOS 资产
@@ -219,8 +218,7 @@ jobs:
           bunx electron-builder `
             --win `
             --x64 `
-            --publish never `
-            --config.artifactName='Xcode-${version}-windows-${arch}.${ext}'
+            --publish never
         working-directory: apps/electron
 
       - name: 校验并整理 Windows 资产

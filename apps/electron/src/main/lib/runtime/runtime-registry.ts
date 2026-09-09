@@ -6,7 +6,6 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type {
   RuntimeActivation,
@@ -21,7 +20,7 @@ import type {
   RuntimePackageStatus,
   RuntimeRelease,
 } from '@proma/shared'
-import { getRuntimeConfigPath } from '../config-paths'
+import { getRuntimeConfigPath, getRuntimeHomeDir } from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
 import { EXECUTABLE_RUNTIME_ID, isExecutableRuntimeId } from './pi-runtime-policy'
 
@@ -84,11 +83,27 @@ interface BundledPackageInfo {
   version: string
 }
 
-function defaultConfig(now = Date.now()): RuntimeConfig {
+interface RuntimeHomeEnvironment extends Readonly<Record<string, string | undefined>> {
+  PROMA_RUNTIME_HOME?: string
+  FRAKIO_WORK_RUNTIME_HOME?: string
+}
+
+/** 显式环境变量优先；新用户默认统一落到当前配置目录的 runtime 子目录。 */
+export function resolveDefaultRuntimeHome(
+  env: Readonly<RuntimeHomeEnvironment>,
+  fallback: () => string = getRuntimeHomeDir,
+): string {
+  return env.PROMA_RUNTIME_HOME
+    || env.FRAKIO_WORK_RUNTIME_HOME
+    || fallback()
+}
+
+function defaultConfig(
+  now = Date.now(),
+  runtimeHome = resolveDefaultRuntimeHome(process.env),
+): RuntimeConfig {
   return {
-    runtimeHome: process.env.PROMA_RUNTIME_HOME
-      || process.env.FRAKIO_WORK_RUNTIME_HOME
-      || join(homedir(), '.proma-runtime'),
+    runtimeHome,
     runtimeSourceHome: process.env.PROMA_RUNTIME_SOURCE_HOME
       || process.env.FRAKIO_WORK_SOURCE_HOME
       || null,
@@ -108,15 +123,19 @@ export function migrateRuntimeConfig(
   stored: Partial<RuntimeConfig> | null | undefined,
   now = Date.now(),
 ): RuntimeConfig {
-  const defaults = defaultConfig(now)
+  const storedRuntimeHome = typeof stored?.runtimeHome === 'string'
+    ? stored.runtimeHome
+    : typeof stored?.frakioHome === 'string' ? stored.frakioHome : null
+  const defaults = defaultConfig(
+    now,
+    storedRuntimeHome ?? resolveDefaultRuntimeHome(process.env),
+  )
   return {
     ...defaults,
     runtimeSourceHome: typeof stored?.runtimeSourceHome === 'string'
       ? stored.runtimeSourceHome
       : typeof stored?.frakioSourceHome === 'string' ? stored.frakioSourceHome : defaults.runtimeSourceHome,
-    runtimeHome: typeof stored?.runtimeHome === 'string'
-      ? stored.runtimeHome
-      : typeof stored?.frakioHome === 'string' ? stored.frakioHome : defaults.runtimeHome,
+    runtimeHome: storedRuntimeHome ?? defaults.runtimeHome,
     runtimeApiBaseUrl: typeof stored?.runtimeApiBaseUrl === 'string'
       ? stored.runtimeApiBaseUrl
       : typeof stored?.frakioApiBaseUrl === 'string' ? stored.frakioApiBaseUrl : defaults.runtimeApiBaseUrl,

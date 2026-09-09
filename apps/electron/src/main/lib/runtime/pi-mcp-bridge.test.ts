@@ -75,6 +75,33 @@ describe('Pi MCP 桥接', () => {
     await bridge.dispose()
   })
 
+  test('Given 注册 Agent 只允许只读 MCP 工具 When 发现或绕过发现直接调用 Then 写工具始终不可见且不可执行', async () => {
+    const mcpServers = await promaBuiltinMcpHttpHost.materialize('sess-policy', {
+      files: builtinMcpToolFactory.createSdkMcpServer({
+        name: 'files',
+        version: '1',
+        tools: [
+          builtinMcpToolFactory.tool('read', '读取', {}, () => ({ content: [{ type: 'text', text: 'read' }] })),
+          builtinMcpToolFactory.tool('write', '写入', {}, () => ({ content: [{ type: 'text', text: 'write' }] })),
+        ],
+      }),
+    })
+    const bridge = new PiMcpBridge()
+    bridge.configure(mcpServers, { allowedTools: ['mcp__files__read'] })
+    expect(await bridge.discover('files')).toMatchObject([{ name: 'mcp__files__read' }])
+    await expect(bridge.call({
+      server: 'files',
+      tool: 'mcp__files__write',
+      arguments: {},
+    })).rejects.toThrow('注册 Agent 不允许使用工具')
+    expect(await bridge.call({
+      server: 'files',
+      tool: 'mcp__files__read',
+      arguments: {},
+    })).toBe('read')
+    await bridge.dispose()
+  })
+
   test('Given MCP 返回图片 When 投影给 Pi Then 保留标准图片内容块', () => {
     const result = normalizePiMcpToolResult({
       content: [

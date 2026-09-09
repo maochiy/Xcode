@@ -15,8 +15,8 @@ import type {
   AskUserRequest,
   PermissionRequest,
   PromaPermissionMode,
+  RegisteredAgentRuntimeSnapshot,
   SDKMessage,
-  SDKUserMessage,
 } from '@proma/shared'
 import {
   createAgentSession,
@@ -34,13 +34,14 @@ import {
   buildRecoveredDelegationState,
   buildDelegationTaskWithSharedContext,
   buildDelegationPrompt,
+  applyRegisteredAgentRuntimeSnapshot,
   resolveDelegationPermissionMode,
-  hasSubAgentIntent,
+  snapshotRegisteredAgent,
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
-import { isUserInputMessage, extractUserText } from '@proma/session-core'
 import type { BuiltinMcpToolFactory } from './builtin-mcp/tool-definition'
 import { EXECUTABLE_RUNTIME_ID } from './runtime/pi-runtime-policy'
+import { getRegisteredAgent, listRegisteredAgents } from './agent-registration-service'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -65,6 +66,7 @@ interface DelegationRecord {
   role: AgentDelegationRole
   goal: string
   permissionMode: PromaPermissionMode
+  registeredAgentSnapshot?: RegisteredAgentRuntimeSnapshot
   status: AgentDelegationStatus
   startedAt: number
   completedAt?: number
@@ -239,6 +241,7 @@ function assertNonBlank(value: string | undefined, field: string): string {
 }
 
 interface DelegateAgentArgs {
+  agentId?: string
   title?: string
   role?: AgentDelegationRole
   task: string
@@ -265,25 +268,6 @@ function createDelegationCompletion(): Pick<DelegationRecord, 'completion' | 're
     resolveCompletion = resolve
   })
   return { completion, resolveCompletion }
-}
-
-/** 取当前会话最近一条真实用户消息的文本（过滤 tool_result / 合成消息） */
-function latestUserInputText(sessionId: string): string {
-  const messages = getAgentSessionSDKMessages(sessionId)
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (!message || message.type !== 'user') continue
-    const userMessage = message as SDKUserMessage
-    if (!isUserInputMessage(userMessage)) continue
-    const text = extractUserText(userMessage)
-    if (text && text.trim()) return text
-  }
-  return ''
-}
-
-/** 用户是否在当前对话明确要求开启子 Agent（硬开关判断） */
-export function userRequestedSubAgents(sessionId: string): boolean {
-  return hasSubAgentIntent(latestUserInputText(sessionId))
 }
 
 function assertCanCreateDelegation(
@@ -392,6 +376,8 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     role: record.role,
     goal: record.goal,
     permissionMode: record.permissionMode,
+    registeredAgentId: record.registeredAgentSnapshot?.id,
+    registeredAgentName: record.registeredAgentSnapshot?.name,
     status: record.status,
     startedAt: record.startedAt,
     completedAt: record.completedAt,
@@ -419,6 +405,8 @@ function listKnownDelegations(parentSessionId: string): Array<Record<string, unk
       role: session.delegationRole,
       goal: session.delegationGoal,
       permissionMode: session.permissionMode,
+      registeredAgentId: session.registeredAgentSnapshot?.id,
+      registeredAgentName: session.registeredAgentSnapshot?.name,
       status: session.delegationStatus,
       startedAt: session.createdAt,
       completedAt: session.delegationStatus && session.delegationStatus !== 'running' ? session.updatedAt : undefined,
@@ -455,6 +443,8 @@ function getDelegationResult(parentSessionId: string, delegationId: string): Rec
     role: session.delegationRole,
     goal: session.delegationGoal,
     permissionMode: session.permissionMode,
+    registeredAgentId: session.registeredAgentSnapshot?.id,
+    registeredAgentName: session.registeredAgentSnapshot?.name,
     status: session.delegationStatus,
     startedAt: session.createdAt,
     completedAt: session.delegationStatus && session.delegationStatus !== 'running' ? session.updatedAt : undefined,
@@ -505,6 +495,7 @@ function recoverDelegationRecordFromSession(
     ...state,
     channelId: session.channelId ?? fallbackChannelId,
     modelId: session.modelId ?? fallbackModelId,
+    registeredAgentSnapshot: session.registeredAgentSnapshot,
     ...completionHandle,
   }
   if (record.status !== 'running') {
@@ -665,22 +656,34 @@ function startDelegation(
   args: DelegateAgentArgs,
 ): StartDelegationResult {
   const task = assertNonBlank(args.task, 'task')
+  const registeredAgent = args.agentId
+    ? getRegisteredAgent(assertNonBlank(args.agentId, 'agentId'))
+    : undefined
   const delegationId = randomUUID()
-  const role = args.role ?? 'custom'
+  const role = registeredAgent?.role ?? args.role ?? 'custom'
   const title = normalizeTitle(args.title, `协作：${task}`)
   const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
   const parentPermissionMode = getCurrentParentPermissionMode(parent, ctx.permissionMode)
   const permissionMode = resolveDelegationPermissionMode(
     parentPermissionMode,
-    args.permissionMode,
+    registeredAgent?.permissionMode ?? args.permissionMode,
   )
-  const effectiveModelId = args.modelId !== undefined
+  const requestedModelId = registeredAgent?.modelId ?? args.modelId ?? ctx.modelId
+  const effectiveModelId = requestedModelId
     ? assertEnabledModelForChannel({
         channelId: ctx.channelId,
-        modelId: args.modelId,
+        modelId: requestedModelId,
         purpose: '创建协作子会话',
       })
-    : ctx.modelId?.trim() || undefined
+    : undefined
+  const registeredAgentSnapshot: RegisteredAgentRuntimeSnapshot | undefined = registeredAgent
+    ? {
+        ...snapshotRegisteredAgent(registeredAgent),
+        role,
+        permissionMode,
+        ...(effectiveModelId ? { modelId: effectiveModelId } : {}),
+      }
+    : undefined
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
@@ -698,6 +701,7 @@ function startDelegation(
     delegationDepth: (parent?.delegationDepth ?? 0) + 1,
     delegationGoal: goal,
     permissionMode,
+    registeredAgentSnapshot,
   })
 
   const record: DelegationRecord = {
@@ -710,6 +714,7 @@ function startDelegation(
     role,
     goal,
     permissionMode,
+    registeredAgentSnapshot,
     status: 'running',
     startedAt: Date.now(),
     completion,
@@ -727,7 +732,7 @@ function startDelegation(
   })
 
   runRegisteredHeadlessAgent(
-    {
+    applyRegisteredAgentRuntimeSnapshot({
       sessionId: child.id,
       userMessage: prompt,
       channelId: ctx.channelId,
@@ -736,7 +741,7 @@ function startDelegation(
       permissionModeOverride: permissionMode,
       triggeredBy: 'delegation',
       startedAt: record.startedAt,
-    },
+    }, registeredAgentSnapshot),
     {
       source: 'delegation',
       onError: (error) => {
@@ -765,6 +770,7 @@ function buildCollaborationSchemas(z: ZodModule['z']) {
   const role = z.enum(['explore', 'research', 'implement', 'review', 'custom'])
   const permissionMode = z.enum(['plan', 'default', 'bypassPermissions'])
   const delegateItem = z.object({
+    agentId: nonBlankString.optional().describe('可选注册 Agent ID；未知或禁用 ID 会失败'),
     title: z.string().optional().describe('子会话标题，简短说明子任务'),
     role: role.optional().describe('子任务角色：explore/research/implement/review/custom'),
     task: nonBlankString.describe('发送给子 Agent 的完整任务说明，必须自包含必要上下文'),
@@ -774,7 +780,9 @@ function buildCollaborationSchemas(z: ZodModule['z']) {
   })
   return {
     availableModels: {},
+    registeredAgents: {},
     delegate: {
+      agentId: nonBlankString.optional().describe('可选注册 Agent ID；未知或禁用 ID 会失败'),
       title: z.string().optional().describe('子会话标题，简短说明子任务'),
       role: role.optional().describe('子任务角色：explore/research/implement/review/custom'),
       task: nonBlankString.describe('发送给子 Agent 的完整任务说明，必须自包含必要上下文'),
@@ -835,6 +843,28 @@ export async function injectAgentCollaborationMcpServer(
         schemas.availableModels,
         async () => {
           return jsonResult(getAvailableAgentModels(ctx))
+        },
+        { annotations: { readOnlyHint: true } },
+      ),
+      sdk.tool(
+        'list_registered_agents',
+        '列出当前已启用、可用于 delegate_agent/delegate_agents 的注册 Agent 元数据。不会返回完整系统提示词。',
+        schemas.registeredAgents,
+        async () => {
+          return jsonResult({
+            agents: listRegisteredAgents().map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              description: agent.description,
+              role: agent.role,
+              modelId: agent.modelId,
+              permissionMode: agent.permissionMode,
+              effortLevel: agent.effortLevel,
+              tools: agent.tools,
+              disallowedTools: agent.disallowedTools,
+              maxTurns: agent.maxTurns,
+            })),
+          })
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -1064,7 +1094,7 @@ export async function injectAgentCollaborationMcpServer(
           emitDelegationStatusChanged(record)
 
           runRegisteredHeadlessAgent(
-            {
+            applyRegisteredAgentRuntimeSnapshot({
               sessionId: record.childSessionId,
               userMessage: args.message,
               channelId: record.channelId,
@@ -1073,7 +1103,7 @@ export async function injectAgentCollaborationMcpServer(
               permissionModeOverride: record.permissionMode,
               triggeredBy: 'delegation',
               startedAt: Date.now(),
-            },
+            }, record.registeredAgentSnapshot),
             {
               source: 'delegation',
               onError: (error) => {

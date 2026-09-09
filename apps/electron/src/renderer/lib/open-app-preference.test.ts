@@ -44,6 +44,8 @@ describe('mergeOpenAppOptions', () => {
   test('Given 系统返回改名前后的应用自身 When 合并打开方式 Then 均被过滤', () => {
     expect(mergeOpenAppOptions([
       { name: 'Xcode', appPath: '/Applications/Xcode-Desktop.app', iconDataUrl: '' },
+      { name: 'Xcode', appPath: '/Applications/xcodes.app', iconDataUrl: '' },
+      { name: 'xcodes', appPath: '', iconDataUrl: '' },
       { name: 'Proma', appPath: '/Applications/Proma.app', iconDataUrl: '' },
     ])).toEqual([])
   })

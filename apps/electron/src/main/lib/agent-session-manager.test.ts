@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
+import type { AgentSessionMeta } from '@proma/shared'
 
 type AgentSessionManager = typeof import('./agent-session-manager')
 type AgentSessionContextPrompt = typeof import('./agent-session-context-prompt')
@@ -9,6 +10,7 @@ type AgentSessionContextPrompt = typeof import('./agent-session-context-prompt')
 let manager: AgentSessionManager
 let contextPrompt: AgentSessionContextPrompt
 let tempHome: string
+const validatedForkModelIds: string[] = []
 const originalHome = process.env.HOME
 const originalPromaDev = process.env.PROMA_DEV
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -40,34 +42,25 @@ mock.module('node:os', () => ({
   homedir: () => tempHome,
 }))
 
+mock.module('./agent-model-selection', () => ({
+  assertEnabledModelForChannel: (input: { modelId?: string }) => {
+    if (input.modelId) validatedForkModelIds.push(input.modelId)
+    return input.modelId?.trim()
+  },
+}))
+
 function jsonl(rows: string[]): string {
   return rows.join('\n') + '\n'
 }
 
 function writeAgentSessionJsonl(sessionId: string, rows: string[]): void {
-  const dir = join(tempHome, '.proma', 'agent-sessions')
+  const dir = join(tempHome, 'xcodes', 'agent-sessions')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${sessionId}.jsonl`), jsonl(rows), 'utf-8')
 }
 
-function writeAgentSessionsIndex(sessions: Array<{
-  id: string
-  title: string
-  workspaceId: string
-  createdAt: number
-  updatedAt: number
-  runtimeSessionId?: string
-  titleSource?: 'runtime' | 'generated' | 'user'
-  channelId?: string
-  modelId?: string
-  pinned?: boolean
-  archived?: boolean
-  starred?: boolean
-  permissionMode?: 'default' | 'bypassPermissions' | 'plan'
-  planModeEnabled?: boolean
-  draft?: boolean
-}>): void {
-  const dir = join(tempHome, '.proma')
+function writeAgentSessionsIndex(sessions: AgentSessionMeta[]): void {
+  const dir = join(tempHome, 'xcodes')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'agent-sessions.json'), JSON.stringify({ version: 2, sessions }), 'utf-8')
 }
@@ -2528,6 +2521,87 @@ describe('Agent 会话 ID 引用', () => {
     expect(prompt).toContain('id="archived-cross-workspace-session"')
     expect(prompt).toContain('其他项目的历史会话')
     expect(prompt).toContain('CLI target: archived-cross-workspace-session')
+  })
+})
+
+describe('Agent 会话 fork 投影', () => {
+  test('Given 注册子 Agent 固定了运行边界 When fork 且请求其它模型 Then 继承边界和固定模型但不复用委派 ID', async () => {
+    validatedForkModelIds.length = 0
+    writeAgentSessionsIndex([{
+      id: 'registered-child',
+      title: '注册审查 Agent',
+      channelId: 'channel-a',
+      modelId: 'fixed-model',
+      workspaceId: 'workspace-a',
+      permissionMode: 'bypassPermissions',
+      planModeEnabled: true,
+      parentSessionId: 'parent-session',
+      rootSessionId: 'root-session',
+      sourceDelegationId: 'delegation-original',
+      delegationRole: 'review',
+      delegationDepth: 1,
+      delegationGoal: '审查 fork 边界',
+      registeredAgentSnapshot: {
+        id: 'reviewer',
+        name: '审查员',
+        description: '只读审查',
+        prompt: '只做审查。',
+        modelId: 'fixed-model',
+        permissionMode: 'plan',
+        tools: ['Read'],
+        disallowedTools: ['Write'],
+        maxTurns: 3,
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    }])
+
+    const fork = await manager.createForkedAgentSessionProjection({
+      sessionId: 'registered-child',
+      modelId: 'alternate-model',
+    }, 'runtime-fork-id')
+
+    expect(fork).toMatchObject({
+      runtimeSessionId: 'runtime-fork-id',
+      modelId: 'fixed-model',
+      permissionMode: 'bypassPermissions',
+      planModeEnabled: true,
+      parentSessionId: 'parent-session',
+      rootSessionId: 'root-session',
+      delegationRole: 'review',
+      delegationDepth: 1,
+      delegationGoal: '审查 fork 边界',
+      registeredAgentSnapshot: {
+        id: 'reviewer',
+        modelId: 'fixed-model',
+        permissionMode: 'plan',
+        tools: ['Read'],
+        disallowedTools: ['Write'],
+        maxTurns: 3,
+      },
+    })
+    expect(fork.sourceDelegationId).toBeUndefined()
+    expect(validatedForkModelIds).toEqual(['fixed-model'])
+  })
+
+  test('Given 普通旧会话只有历史模型 When fork 未显式选择模型 Then 原样继承且不新增模型校验', async () => {
+    validatedForkModelIds.length = 0
+    writeAgentSessionsIndex([{
+      id: 'legacy-session',
+      title: '普通旧会话',
+      channelId: 'legacy-channel',
+      modelId: 'legacy-model',
+      workspaceId: 'workspace-a',
+      createdAt: 1,
+      updatedAt: 1,
+    }])
+
+    const fork = await manager.createForkedAgentSessionProjection({
+      sessionId: 'legacy-session',
+    }, 'legacy-runtime-fork-id')
+
+    expect(fork.modelId).toBe('legacy-model')
+    expect(validatedForkModelIds).toEqual([])
   })
 })
 

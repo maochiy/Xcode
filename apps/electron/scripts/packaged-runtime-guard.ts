@@ -10,7 +10,7 @@ import type { ElectronBuilderPlatform } from './packaged-cli-guard'
 export function resolvePackagedResourcesRoot(
   appOutDir: string,
   electronPlatformName: ElectronBuilderPlatform,
-  productName = 'Xcode-Desktop',
+  productName = 'xcodes',
 ): string {
   if (electronPlatformName === 'darwin') {
     return join(appOutDir, `${productName}.app`, 'Contents', 'Resources')
@@ -35,8 +35,13 @@ const BUNDLED_RUNTIME_FILES: Array<{ label: string; candidates: string[] }> = [
 export function ensurePackagedBundledRuntimes(
   appOutDir: string,
   electronPlatformName: ElectronBuilderPlatform,
+  productName?: string,
 ): string[] {
-  const resourcesRoot = resolvePackagedResourcesRoot(appOutDir, electronPlatformName)
+  const resourcesRoot = resolvePackagedResourcesRoot(
+    appOutDir,
+    electronPlatformName,
+    productName,
+  )
   const missing = BUNDLED_RUNTIME_FILES.filter((item) =>
     !item.candidates.some((relativePath) => existsSync(join(resourcesRoot, relativePath))),
   )

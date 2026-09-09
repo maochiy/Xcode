@@ -7,6 +7,7 @@
 
 import type {
   PromaPermissionMode,
+  AgentRuntimeToolPolicy,
   AgentRuntimeProviderConfiguration,
   SDKMessage,
   ThinkingConfig,
@@ -62,6 +63,10 @@ export interface AgentQueryInput {
   env?: Record<string, string | undefined>
   /** Runtime 专用系统提示词。 */
   systemPrompt?: string | { type: 'preset'; preset: 'claude_code'; append?: string }
+  /** Runtime 必须强制执行的工具白名单/黑名单。 */
+  toolPolicy?: AgentRuntimeToolPolicy
+  /** Runtime 本轮最多允许的模型轮次。 */
+  maxTurns?: number
   /** 由 Proma 主进程编译的统一上下文包。 */
   contextPacket?: ContextPacket
   /** 由 Proma 模型中心解析出的 Runtime 路由。 */

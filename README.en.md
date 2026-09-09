@@ -1,43 +1,50 @@
-# Proma
+<div align="center">
+  <img src="./apps/electron/resources/icon.svg" alt="Xcode icon" width="88" height="88" />
+  <h1>Xcode</h1>
+  <p>A local-first AI desktop workbench for Chat, Agent workflows, projects, Skills, MCP, automation, and remote bots.</p>
+</div>
 
-Proma is a local-first AI desktop app that brings multi-model Chat, general-purpose Agent workflows, workspaces, Skills, MCP, remote bots, and memory into one open-source client.
+[中文 README](./README.md) | [Tutorial (inherited from Proma)](./tutorial/tutorial.md) | [Repository](https://github.com/maochiy/Xcode) | [Releases](https://github.com/maochiy/Xcode/releases)
 
-It is not just another chat box. Proma is meant to become a long-lived Agent workbench for your personal workflows: use Chat for simple answers, use Agent when the task needs to act on files, tools, projects, and longer context.
+> [!IMPORTANT]
+> **Xcode is an independently maintained derivative based on the open-source version of [Proma](https://github.com/proma-ai/Proma).** Proma was created by **Erlich Liu** with contributions from the Proma contributors. This repository is not an official Proma release. It is also unrelated to, unaffiliated with, and not endorsed by Apple or Apple's Xcode developer tools.
 
-![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
-
-[中文 README](./README.md) | [Beginner Tutorial](./tutorial/tutorial.md) | [Open-Source Release](https://github.com/ErlichLiu/Proma/releases) | [Commercial Version](https://proma.cool/download)
-
-## What Proma Can Do
+## What Xcode Can Do
 
 - **Chat mode**: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.
-- **Agent mode**: two built-in runtimes—Claude Agent SDK and Pi Agent SDK—with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions. Claude is the default; switch runtimes below the Agent input.
-- **Collaboration and tasks**: complex work can be split into traceable collaboration agents and tasks, with calls and results shown in the message stream.
-- **Skills & MCP**: each workspace can manage its own Skills, MCP servers, and workspace files.
-- **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
-- **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.
-- **Local-first data**: conversations, workspaces, attachments, settings, and Skills are stored under `~/.proma/` as JSON / JSONL files, without a local database.
-- **Desktop experience**: auto-update, proxy settings, file preview, global shortcuts, quick task window, voice input, and light / dark / system themes.
+- **Agent mode**: Pi-powered workspace tasks with permission modes, file operations, streaming output, plan confirmation, ask-user interactions, tool calling, and session resume.
+- **Collaboration and tasks**: split complex work into traceable collaboration sessions and tasks, with calls and results shown in the message stream.
+- **Skills & MCP**: manage workspace-specific Skills, MCP servers, memory, and persistent workspace files.
+- **Remote bots**: connect Lark / Feishu, DingTalk, and WeChat bridges from the desktop app.
+- **Local-first data**: store conversations, workspaces, attachments, settings, and Skills under `~/.proma/` as JSON / JSONL files without a local database.
+- **Desktop experience**: proxy settings, file preview, global shortcuts, a quick-task window, voice input, auto-update support, and light / dark / system themes.
 
 ## Getting Started
 
 ### Download
 
-Download the open-source version from [GitHub Releases](https://github.com/ErlichLiu/Proma/releases), with builds for macOS Apple Silicon, macOS Intel, and Windows.
+Download Xcode from the [maochiy/Xcode Releases](https://github.com/maochiy/Xcode/releases) page. The current release line starts at **v0.0.1** and provides:
 
-If you want fewer API setup steps, you can also use the [Proma commercial version](https://proma.cool/download). The commercial and open-source versions run in parallel; the commercial version mainly adds built-in model channels and subscription options.
+- macOS Apple Silicon (`arm64`)
+- macOS Intel (`x64`)
+- Windows (`x64`)
+
+The v0.0.1 release artifacts are distributed without platform developer signing; the macOS builds are also not notarized. Verify that you downloaded them from the repository above and review any operating-system security prompt before opening them.
+
+On macOS, the application bundle is named **`Xcode-Desktop.app`** to avoid overwriting Apple's `Xcode.app`, while the displayed product name remains Xcode.
+
+The version sequence restarts at `0.0.1`; existing Proma installations with a higher version will not automatically downgrade to Xcode. Install manually and back up `~/.proma/` first. The data directory is shared for compatibility, not an isolated copy, so avoid using both applications against the same data at the same time.
 
 ### First Setup
 
-1. Open Proma and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
-2. Go to **Settings > Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
-3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
-4. The default Claude Agent Runtime requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
-5. Switch Claude / Pi directly below the Agent input. Pi can use any enabled model channel.
-6. Go to **Settings > Agent** and choose the default Agent channel, model, and workspace.
-7. Configure memory, web search, or Feishu / DingTalk / WeChat bridges from their corresponding settings tabs if needed.
+1. Open Xcode and finish the environment check. Git, Bun / Node.js, and a usable shell may be required by Agent tools and project workflows.
+2. Go to **Settings > Channels**, add an AI provider channel, and configure its Base URL, credentials, and model list as required by that provider.
+3. Use Chat for direct conversations or switch to Agent for workspace-based tasks.
+4. Agent execution uses the built-in **Pi Runtime only**. There is no Claude / Pi runtime selector and no Claude Agent SDK runtime.
+5. Go to **Settings > Agent** to choose the default Agent channel, model, workspace, permissions, Skills, and MCP configuration.
+6. Configure memory, web search, or remote bot bridges from their corresponding settings when needed.
 
-## Choosing A Mode
+## Choosing a Mode
 
 ### Use Chat For
 
@@ -49,69 +56,72 @@ If you want fewer API setup steps, you can also use the [Proma commercial versio
 ### Use Agent For
 
 - Creating, editing, or organizing local files.
-- Research, report writing, and multi-step tasks.
-- Work that needs MCP, Skills, Shell, Git, project files, or external context.
-- Tasks that benefit from permissions, plan mode, background execution, or remote bot follow-up.
+- Research, report writing, and multi-step project work.
+- Tasks that need MCP, Skills, Shell, Git, project files, or external context.
+- Work that benefits from permissions, plan mode, background execution, collaboration sessions, or remote bot follow-up.
 
 In short: **use Chat when you need an answer; use Agent when you need work to be done.**
 
 ## Screenshots
 
-### Chat Analysis
+> [!NOTE]
+> The screenshots below are **historical reference images inherited from the Proma open-source project**. They illustrate the inherited product concepts and are **not current screenshots of the Xcode-branded application**. Labels and visual details may differ from v0.0.1.
+
+### Chat Analysis — Historical Proma Reference
 
 Use Chat for lightweight but practical analysis: compare audience needs, generate a table, and shape first-screen README copy quickly.
 
-![Proma Chat analysis](./docs/assets/screenshots/proma-chat-demo.png)
+![Historical Proma Chat analysis reference](./docs/assets/screenshots/proma-chat-demo.png)
 
-### Agent Workbench
+### Agent Workbench — Historical Proma Reference
 
-Agent works inside a workspace, reads project files, progresses through tasks, outputs structured findings, and keeps reusable files visible in the right-side workspace panel.
+Agent works inside a workspace, reads project files, progresses through tasks, outputs structured findings, and keeps reusable files visible in the workspace panel.
 
-![Proma Agent workbench](./docs/assets/screenshots/proma-agent-demo.png)
+![Historical Proma Agent workbench reference](./docs/assets/screenshots/proma-agent-demo.png)
 
-### Skills
+### Skills — Historical Proma Reference
 
-Each workspace can keep its own reusable Skills. The `feedback-synthesis` Skill shown here turns scattered feedback, interviews, and issues into themes, evidence, and priority suggestions.
+Each workspace can keep reusable Skills for repeatable workflows.
 
-![Proma workspace Skills](./docs/assets/screenshots/proma-skills-demo.png)
+![Historical Proma workspace Skills reference](./docs/assets/screenshots/proma-skills-demo.png)
 
-### Skills & MCP
+### Skills & MCP — Historical Proma Reference
 
-The same workspace can manage stdio and HTTP MCP servers, enabling or disabling external context per project.
+A workspace can manage stdio and HTTP MCP servers, enabling or disabling external context per project.
 
-![Proma MCP settings](./docs/assets/screenshots/proma-mcp-demo.png)
+![Historical Proma MCP settings reference](./docs/assets/screenshots/proma-mcp-demo.png)
 
-### Streaming Voice Input
+### Streaming Voice Input — Historical Proma Reference
 
-Proma supports Doubao-powered streaming voice input, both inside Proma and across the desktop:
+The inherited desktop voice-input workflow can insert recognized text into the application or the active desktop cursor, depending on the selected mode.
 
-- Inside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript into the active Proma input box.
-- Outside Proma: press Ctrl + Backtick to start recognition, then press it again to finish and insert the transcript at the current cursor position. If there is no active cursor, Proma writes the transcript to the clipboard.
+![Historical Proma voice input reference](./docs/assets/screenshots/proma-typeless-input.png)
 
-![Proma voice input](./docs/assets/screenshots/proma-typeless-input.png)
+## Agent Runtime and Providers
 
-## Agent Runtimes and Providers
+Xcode has one executable Agent runtime: **Pi**.
 
-Proma provides two switchable Agent runtimes:
+- The runtime adapter is implemented by `apps/electron/src/main/lib/runtime/pi-runtime-adapter.ts`, backed by `apps/electron/src/main/lib/runtime/frakio-pi-runtime-adapter.ts` for compatibility with the existing bridge implementation.
+- Pi uses `@earendil-works/pi-coding-agent`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`, all pinned to **`0.80.9`**.
+- `resources/pi-runtime/` contains the bundled Pi bridge, worker, thread-context implementation, and worker support modules.
+- Historical Runtime IDs such as `claude`, `codex`, and `hermes` remain in some types and persisted-data migration paths only. They are normalized to Pi and are not selectable execution kernels.
+- Dispatch policy can assign different task responsibilities inside Pi, but this is role routing—not runtime switching.
 
-- **Claude Agent Runtime (default)**: powered by `@anthropic-ai/claude-agent-sdk` and using the Anthropic Messages API or compatible endpoints.
-- **Pi Agent Runtime**: powered by `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai`. It dynamically registers enabled Proma channels as Pi providers and supports OpenAI Chat Completions / Responses, Google Generative AI, Anthropic Messages, and compatible endpoints.
+Pi maps configured channels to an explicit runtime API protocol:
 
-| Channel type | Chat | Claude Agent | Pi Agent |
-| --- | --- | --- | --- |
-| Anthropic / Anthropic-compatible | Supported | Supported | Supported |
-| Anthropic-protocol channels such as DeepSeek, Kimi API / Coding Plan, Zhipu Coding Plan, MiniMax, and Xiaomi MiMo | Supported | Supported | Supported |
-| OpenAI, OpenAI Responses, Google, Zhipu AI, Doubao, and Qwen | Supported | Not yet | Supported |
-| Custom OpenAI-compatible endpoints | Supported | Not yet | Supported |
-| ChatGPT subscription (Codex OAuth) | — | Supported | Supported |
+| Channel / protocol family | Chat | Pi Agent |
+| --- | --- | --- |
+| Anthropic and Anthropic-compatible Messages APIs | Supported | Supported |
+| OpenAI Chat Completions and compatible endpoints | Supported | Supported |
+| OpenAI Responses | Supported | Supported |
+| Google Generative Language | Supported | Supported |
+| ChatGPT subscription through Codex OAuth | — | Supported |
 
-> Pi Runtime can be switched directly below the input of each Agent session. Switching starts a new underlying SDK session but does not delete Proma's saved messages. Pi bridges workspace Skills, user-configured MCP servers, and Proma's built-in Automation / Collaboration tools. Tool calling, reasoning, and context capabilities still vary by model provider.
+Provider-specific support for tools, reasoning, context windows, and attachments can vary. Xcode makes no provider whitelist or third-party account-policy guarantee, including for Kimi plans.
 
-> **Kimi Coding Plan users**: Proma is officially whitelisted by Kimi. Using Proma with your Kimi Coding Plan subscription will not trigger any third-party client ban policy.
+## Local Data and Compatibility Names
 
-## Local Data
-
-Proma stores data in local files so it is easy to back up, migrate, and inspect.
+Xcode preserves Proma's local storage format so existing data remains inspectable and compatible:
 
 ```text
 ~/.proma/
@@ -133,54 +143,70 @@ Proma stores data in local files so it is easy to back up, migrate, and inspect.
 └── sdk-config/
 ```
 
-API keys are encrypted through Electron `safeStorage` before being written to `channels.json`. Proma does not use a local database; core data is represented as JSON configuration and append-only JSONL logs.
+API keys are encrypted through Electron `safeStorage` before being written to `channels.json`. Core data uses JSON configuration and append-only JSONL logs rather than a local database.
+
+The following Proma identifiers are intentionally retained for compatibility and do **not** indicate an incomplete product rename:
+
+- `~/.proma/` for existing local data and configuration.
+- The `@proma/*` workspace package scope used by the source code.
+- The bundled `proma` CLI and related environment / file-format identifiers used by existing Skills, scripts, sessions, and backups.
+
+Changing these compatibility identifiers would risk breaking local data, integrations, or automation without providing a functional benefit.
 
 ## Development
 
-Proma is a Bun workspace monorepo.
+Xcode is a Bun workspace monorepo:
 
 ```text
-proma-v2/
+.
 ├── packages/
-│   ├── shared/     # shared types, IPC constants, config, utilities
-│   ├── core/       # Provider Adapters, SSE, code highlighting
-│   └── ui/         # shared React UI components
+│   ├── shared/        # shared types, IPC constants, config, and utilities
+│   ├── session-core/  # session reading, grouping, search, and rendering
+│   ├── core/          # provider adapters, SSE, and code highlighting
+│   └── ui/            # shared React UI components
 └── apps/
-    └── electron/   # Electron desktop app
+    ├── cli/           # compatible proma command-line interface
+    └── electron/      # Xcode Electron desktop application
 ```
 
 Current package versions:
 
 | Package | Version | Responsibility |
 | --- | --- | --- |
-| `@proma/electron` | `0.15.0` | Electron desktop app |
-| `@proma/shared` | `0.1.42` | shared types, IPC constants, config, utilities |
-| `@proma/core` | `0.2.15` | Provider Adapters, SSE, Shiki highlighting |
-| `@proma/ui` | `0.1.9` | shared React UI components |
+| `@proma/electron` | `0.0.1` | Xcode Electron desktop application |
+| `@proma/cli` | `0.1.0` | compatible `proma` CLI |
+| `@proma/shared` | `0.1.72` | shared types, IPC constants, config, and utilities |
+| `@proma/session-core` | `0.1.6` | shared headless session logic for Electron and CLI |
+| `@proma/core` | `0.2.17` | provider adapters, SSE, and Shiki highlighting |
+| `@proma/ui` | `0.1.11` | shared React UI components |
 
 Common commands:
 
 ```bash
+# Get the source
+git clone https://github.com/maochiy/Xcode.git
+cd Xcode
+
 # Install dependencies
 bun install
 
 # Development mode: Vite + Electron + hot reload
 bun run dev
 
-# Build Electron app
+# Build the Electron application
 bun run electron:build
 
 # Build and run
 bun run electron:start
 
-# Typecheck
+# Typecheck all workspaces
 bun run typecheck
 
-# Test
+# Run tests
 bun test
 ```
 
-More granular scripts are available inside the Electron app:
+Electron-specific commands:
 
 ```bash
 cd apps/electron
@@ -190,6 +216,7 @@ bun run dev:electron
 bun run build:main
 bun run build:preload
 bun run build:renderer
+bun run build:cli
 bun run dist:fast
 ```
 
@@ -207,90 +234,79 @@ bun run dist:fast
 | Code highlighting | Shiki |
 | Build | Vite + esbuild |
 | Distribution | electron-builder |
-| Agent runtimes | Claude: `@anthropic-ai/claude-agent-sdk@0.3.201`; Pi: `@earendil-works/pi-* @0.80.3` |
+| Agent runtime | Pi via `@earendil-works/pi-*` `0.80.9` |
 
 ## Architecture
 
-Proma's core communication path is:
+The core desktop communication path is:
 
 ```text
-shared types and IPC constants
-  -> main/ipc.ts handlers
-  -> preload/index.ts window.electronAPI bridge
+@proma/shared types and IPC constants
+  -> apps/electron/src/main/ipc.ts handlers
+  -> apps/electron/src/preload/index.ts window.electronAPI bridge
   -> renderer Jotai atoms and React components
 ```
 
-Main-process services live in `apps/electron/src/main/lib/`:
+Key main-process components include:
 
-- `agent-orchestrator.ts`: Agent orchestration, runtime routing, environment variables, SDK calls, event streams, and error handling.
-- `adapters/claude-agent-adapter.ts` / `adapters/pi-agent-adapter.ts`: runtime adapters for Claude and Pi; `runtime-routing-agent-adapter.ts` routes each session to its selected runtime.
-- `agent-session-manager.ts`: Agent session index and JSONL message persistence.
-- `agent-workspace-manager.ts`: workspaces, MCP, Skills, and workspace files.
-- `chat-service.ts`: Chat streaming, Provider Adapters, tool activity.
-- `conversation-manager.ts`: Chat session index and message storage.
-- `channel-manager.ts`: channel CRUD, API key encryption, connection tests, model fetching.
-- `feishu-bridge.ts` / `dingtalk-bridge.ts` / `wechat-bridge.ts`: remote bot bridges.
-- `chat-tool-*`, `document-parser.ts`, `workspace-watcher.ts`: tools, document parsing, and file watching.
+- `main/lib/agent-orchestrator.ts`: Agent orchestration, channel and model routing, permissions, persistence, event streaming, and error handling.
+- `main/lib/runtime/pi-runtime-adapter.ts`: public Pi adapter entry point.
+- `main/lib/runtime/frakio-pi-runtime-adapter.ts`: Pi bridge integration, worker lifecycle, model routing, session restore, MCP, and tool permissions.
+- `main/lib/runtime/runtime-adapters.ts`: Pi-only router that normalizes legacy runtime selections to Pi.
+- `main/lib/runtime/runtime-registry.ts`: Pi-only discovery, activation, capability, and legacy configuration migration.
+- `main/lib/agent-session-manager.ts`: Agent session metadata and JSONL message persistence.
+- `main/lib/agent-workspace-manager.ts`: workspaces, MCP, Skills, and workspace files.
+- `main/lib/chat-service.ts`: Chat streaming, provider adapters, and tool activity.
+- `main/lib/conversation-manager.ts`: Chat conversation metadata and message storage.
+- `main/lib/channel-manager.ts`: channel configuration, credential encryption, connection tests, and model discovery.
+- `main/lib/feishu-bridge.ts`, `dingtalk-bridge.ts`, and `wechat-bridge.ts`: remote bot integrations.
 
-Renderer state is managed with Jotai. Key atoms live in `apps/electron/src/renderer/atoms/`. Agent IPC listeners are mounted globally at the app root so streaming events, permission requests, and background tasks survive view changes.
+Renderer state is managed with Jotai. Agent IPC listeners are mounted globally so streaming events, permission requests, and background tasks survive view changes.
 
 ## Packaging Notes
 
-Both Agent runtimes run as esbuild external dependencies in the main process. Before invoking `electron-builder`, the Electron packaging scripts run `bun run sync:runtime-deps` to copy these runtime dependency closures into the app directory:
+The current packaging path is built around the bundled Pi worker, its physical runtime dependencies, packaging hooks, and the compatible CLI.
 
-- `@anthropic-ai/claude-agent-sdk` (including the platform-specific Claude native binary)
-- `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai`
-- Pi runtime native modules and `pdfjs-dist`
+- `apps/electron/resources/pi-runtime/` is copied through electron-builder `extraResources` and runs outside the ASAR as a forked Pi bridge / worker runtime.
+- `@earendil-works/pi-*` and the worker's runtime dependencies are included from the Electron app's `node_modules`; `asarUnpack` keeps the physical modules available to the forked worker and native add-ons.
+- `resources/pi-worker-compat.cjs` is packaged beside the runtime to patch the limited CommonJS compatibility cases required by the worker.
+- `bun run build:cli` compiles `apps/cli` with `bun build --compile` into the self-contained `proma` / `proma.exe` binary under `resources/bin/`, which is then copied through `extraResources`.
+- The electron-builder `afterPack` hook verifies the bundled Pi Worker and `@earendil-works/pi-coding-agent`, repairs / validates the macOS CLI signature when needed, and smoke-tests the packaged CLI. The `afterSign` hook smoke-tests the CLI again after signing.
+- Release CI builds macOS `arm64`, macOS `x64`, and Windows `x64` separately and publishes artifacts to `maochiy/Xcode`.
 
-When changing packaging, verify that:
+The [Release workflow](./.github/workflows/release.yml) runs on `v*` tag pushes or manual dispatch with `release_tag`. It validates release configuration, runs type and release-flow checks, builds all targets, and verifies packages, blockmaps, and update manifests before publishing. Downloads and future auto-updates use this repository rather than the upstream Proma release channel.
 
-- `build:main` / `watch:main` keep both Agent SDKs external.
-- `scripts/sync-runtime-deps.ts` stays aligned with the external runtime dependency list.
-- `electron-builder.yml` retains the `asarUnpack` rules for the Claude binary and Pi native add-ons.
-- After `bun run dist:fast` on a target platform, both Claude and Pi (when enabled) can start, call tools, and resume sessions.
-
-See [AGENTS.md](./AGENTS.md) for the full engineering conventions.
+When changing packaging, verify the Pi worker files, unpacked runtime dependencies, compatible `proma` CLI, hooks, and target-architecture artifacts together.
 
 ## Contributing
 
-Bug fixes, documentation improvements, tests, UX polish, Skills, MCP configs, and real-world Agent workflows are all welcome.
+Bug fixes, documentation improvements, tests, UX polish, Skills, MCP configurations, and real-world Agent workflows are welcome.
 
-Before opening a PR, please check:
+Before opening a pull request:
 
-- Use Bun scripts and do not mix npm / pnpm lockfiles.
+- Use Bun scripts and do not add npm / pnpm lockfiles.
 - Use Jotai for state management.
-- Keep the app local-first and prefer config files plus JSON / JSONL storage.
+- Keep the app local-first and prefer configuration files plus JSON / JSONL storage.
 - Do not use TypeScript `any`; prefer `interface` for object shapes.
-- When adding IPC, update shared types, main handler, preload bridge, and renderer calls together.
-- Bump the patch version of affected packages when behavior changes.
-- Add focused tests where possible, especially for shared logic, IPC contracts, and persistence formats.
+- When adding IPC, update shared types, the main handler, preload bridge, and renderer calls together.
+- Add focused tests where practical, especially for shared logic, IPC contracts, runtime boundaries, and persistence formats.
 
-## Star History
+See [AGENTS.md](./AGENTS.md) for the repository's complete engineering conventions.
 
-<a href="https://www.star-history.com/?repos=proma-ai%2Fproma&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&theme=dark&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
- </picture>
-</a>
+## Credits and Upstream Attribution
 
-## Credits
+Xcode is derived from the open-source [Proma project](https://github.com/proma-ai/Proma), originally created by **Erlich Liu** and developed with its contributors. Existing source history, attribution, and copyright notices are retained.
 
-- [Shiki](https://shiki.style/): code highlighting.
-- [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid): Mermaid diagram rendering.
-- [Cherry Studio](https://github.com/CherryHQ/cherry-studio): inspiration for multi-provider desktop AI products.
-- [Lobe Icons](https://github.com/lobehub/lobe-icons): AI / LLM brand icons.
-- [Craft Agents OSS](https://github.com/lukilabs/craft-agents-oss): Agent SDK integration reference.
+Additional projects credited by the inherited codebase include:
+
+- [Shiki](https://shiki.style/) for code highlighting.
+- [Beautiful Mermaid](https://github.com/lukilabs/beautiful-mermaid) for Mermaid diagram rendering.
+- [Cherry Studio](https://github.com/CherryHQ/cherry-studio) as inspiration for multi-provider desktop AI products.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) for AI / LLM brand icons.
+- [Craft Agents OSS](https://github.com/lukilabs/craft-agents-oss) as an Agent integration reference.
 
 ## License
 
-The Proma Community Edition is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). The full license text is available in the `LICENSE` file at the repository root.
+This repository is distributed under the existing [GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE). Refer to the repository's `LICENSE` file for the license terms.
 
-**Personal / non-commercial use**: free to use, modify, and distribute, subject to the terms of AGPL-3.0.
-
-**Commercial use**: permitted as long as you fully comply with AGPL-3.0, including (but not limited to) releasing the complete corresponding source code of any modified version you distribute or make available over a network, and licensing all derivative works under AGPL-3.0.
-
-**Commercial license (exemption from AGPL-3.0 obligations)**: if you want to integrate Proma into a closed-source product, offer it as a SaaS service without releasing your modifications, or use it in any way that cannot meet AGPL-3.0 requirements, please contact us by email to obtain a commercial license: [erlichliu@gmail.com](mailto:erlichliu@gmail.com).
-
-By submitting a Pull Request to this project, you agree to license your contribution under AGPL-3.0 and to grant the maintainer the right to relicense it under future commercial license terms.
+This derivative retains the original attribution and copyright notices. This README does not offer a separate commercial license, promise dual licensing, or grant the project maintainers a separate right to relicense contributions. The `LICENSE` file itself has not been changed as part of the Xcode rename.

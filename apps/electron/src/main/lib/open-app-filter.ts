@@ -16,6 +16,7 @@ export const IGNORED_OPEN_APP_NAMES = new Set([
   'Finder',
   'Proma',
   'Xcodes',
+  'xcodes',
   'Xcode-Desktop',
   'Google Chrome',
   'Safari',
@@ -82,7 +83,7 @@ export function isEditorLikeApp(name: string, appPath?: string): boolean {
   if (!normalizedName) return false
   if (isIgnoredOpenAppName(name)) return false
   // 显示名相同，按独立 Bundle 路径区分本应用与 Apple Xcode。
-  if (/(?:^|[\\/])Xcode-Desktop\.app(?:[\\/]|$)/i.test(appPath ?? '')) return false
+  if (/(?:^|[\\/])(?:Xcode-Desktop|xcodes)\.app(?:[\\/]|$)/i.test(appPath ?? '')) return false
   if (isKnownEditorName(name)) return true
   if (EDITOR_NAME_HINTS.some((hint) => normalizedName.includes(hint))) return true
   const normalizedPath = (appPath ?? '').trim().toLowerCase()

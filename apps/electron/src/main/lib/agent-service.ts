@@ -48,6 +48,7 @@ import {
   getAgentTurnChangeStats as readAgentTurnChangeStats,
 } from './agent-turn-change-tracker'
 import { AgentStreamTargetRegistry } from './agent-stream-target-registry'
+import { applyRegisteredAgentRuntimeSnapshot } from './agent-collaboration-utils'
 
 // ===== 实例创建 =====
 
@@ -138,6 +139,15 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
+  const sessionMeta = getAgentSessionMeta(input.sessionId)
+  const parentMeta = sessionMeta?.parentSessionId
+    ? getAgentSessionMeta(sessionMeta.parentSessionId)
+    : undefined
+  input = applyRegisteredAgentRuntimeSnapshot(
+    input,
+    sessionMeta?.registeredAgentSnapshot,
+    parentMeta?.planModeEnabled ? 'plan' : parentMeta?.permissionMode,
+  )
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   const registrationId = registerWebContents(input.sessionId, webContents)
   // 开始新一轮执行时清除"完成未确认"标记
@@ -253,6 +263,15 @@ export async function runAgentHeadless(
     source?: AgentExternalRunSource
   },
 ): Promise<void> {
+  const sessionMeta = getAgentSessionMeta(input.sessionId)
+  const parentMeta = sessionMeta?.parentSessionId
+    ? getAgentSessionMeta(sessionMeta.parentSessionId)
+    : undefined
+  input = applyRegisteredAgentRuntimeSnapshot(
+    input,
+    sessionMeta?.registeredAgentSnapshot,
+    parentMeta?.planModeEnabled ? 'plan' : parentMeta?.permissionMode,
+  )
   // 尝试注册主窗口 webContents，让流式事件同步推送到桌面端
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }

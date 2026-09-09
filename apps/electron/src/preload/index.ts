@@ -6,8 +6,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, BROWSER_IPC_CHANNELS, BROWSER_AGENT_IPC_CHANNELS, TASKBOARD_IPC_CHANNELS } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, NEW_API_AUTH_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_REGISTRATION_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, BROWSER_IPC_CHANNELS, BROWSER_AGENT_IPC_CHANNELS, TASKBOARD_IPC_CHANNELS } from '@proma/shared'
+import { USER_PROFILE_IPC_CHANNELS, NEW_API_AUTH_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -36,6 +36,8 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
+  AgentRegistrationConfig,
+  AgentRegistrationUpdate,
   AgentSessionCatalogSyncedPayload,
   AgentSessionTranscriptSyncedPayload,
   AgentRuntimeModelCatalog,
@@ -501,11 +503,6 @@ export interface ElectronAPI {
   /** 将图片 data URL 写入系统剪贴板 */
   copyImageToClipboard: (dataUrl: string) => Promise<{ success: boolean; message?: string }>
 
-  // ===== 应用图标切换 =====
-
-  /** 设置应用图标变体（传入 variant ID，如 'blue'、'cyberpunk'，'default' 恢复默认） */
-  setAppIcon: (variantId: string) => Promise<boolean>
-
   /** 设置 Dock/Launcher 角标数量（0 表示清除） */
   setDockBadgeCount: (count: number) => Promise<boolean>
 
@@ -562,6 +559,14 @@ export interface ElectronAPI {
   onStreamToolActivity: (callback: (event: StreamToolActivityEvent) => void) => () => void
 
   // ===== Agent 会话管理相关 =====
+
+  /** 获取子 Agent 注册配置。 */
+  getAgentRegistrationConfig: () => Promise<AgentRegistrationConfig>
+
+  /** 保存子 Agent 注册配置。 */
+  saveAgentRegistrationConfig: (
+    input: AgentRegistrationUpdate,
+  ) => Promise<AgentRegistrationConfig>
 
   /** 获取 Agent 会话列表 */
   listAgentSessions: () => Promise<AgentSessionMeta[]>
@@ -1762,11 +1767,6 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(SCRATCH_PAD_IPC_CHANNELS.COPY_IMAGE, dataUrl)
   },
 
-  // 应用图标切换
-  setAppIcon: (variantId: string) => {
-    return ipcRenderer.invoke(APP_ICON_IPC_CHANNELS.SET, variantId)
-  },
-
   // Dock/Launcher 角标
   setDockBadgeCount: (count: number) => {
     return ipcRenderer.invoke(DOCK_BADGE_IPC_CHANNELS.SET_COUNT, count)
@@ -1841,6 +1841,14 @@ const electronAPI: ElectronAPI = {
   },
 
   // Agent 会话管理
+  getAgentRegistrationConfig: () => {
+    return ipcRenderer.invoke(AGENT_REGISTRATION_IPC_CHANNELS.GET)
+  },
+
+  saveAgentRegistrationConfig: (input: AgentRegistrationUpdate) => {
+    return ipcRenderer.invoke(AGENT_REGISTRATION_IPC_CHANNELS.SAVE, input)
+  },
+
   listAgentSessions: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },

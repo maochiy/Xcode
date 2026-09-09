@@ -44,7 +44,7 @@ mock.module('node:os', () => ({
 }))
 
 function writeChannels(channels: unknown[], version = 2): void {
-  const configDir = join(tempHome, '.proma')
+  const configDir = join(tempHome, 'xcodes')
   mkdirSync(configDir, { recursive: true })
   writeFileSync(
     join(configDir, 'channels.json'),
@@ -61,7 +61,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
+  rmSync(join(tempHome, 'xcodes'), { recursive: true, force: true })
 })
 
 afterAll(() => {
@@ -167,7 +167,7 @@ describe('渠道默认模型', () => {
     expect(channelManager.listChannels()[0]?.defaultModelId)
       .toBe('default-model')
     const persisted = JSON.parse(
-      readFileSync(join(tempHome, '.proma', 'channels.json'), 'utf-8'),
+      readFileSync(join(tempHome, 'xcodes', 'channels.json'), 'utf-8'),
     ) as {
       version: number
       channels: Array<{ defaultModelId?: string }>

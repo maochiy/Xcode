@@ -289,7 +289,7 @@ function resolveAppOutDir(opts: DistOptions): string {
       ? [join(electronDir, 'out', `mac-${arch}`)]
       : [join(electronDir, 'out', `mac-${arch}`), join(electronDir, 'out', 'mac')]
     for (const dir of candidates) {
-      if (existsSync(join(dir, 'Xcode-Desktop.app'))) return dir
+      if (existsSync(join(dir, 'xcodes.app'))) return dir
     }
     throw new Error(`未找到 mac 打包产物目录（尝试: ${candidates.join(', ')}）`)
   }

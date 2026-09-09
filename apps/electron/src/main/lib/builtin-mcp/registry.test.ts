@@ -8,9 +8,11 @@ import { isLazyBuiltinMcpServerDefinition } from './tool-definition'
 
 let webSearchInjectCount = 0
 let collaborationInjectCount = 0
+let collaborationEnabled = true
 
 mock.module('./settings', () => ({
-  isBuiltinMcpUserEnabled: (id: string) => id !== 'nano-banana',
+  isBuiltinMcpUserEnabled: (id: string) => id !== 'nano-banana'
+    && (id !== 'collaboration' || collaborationEnabled),
 }))
 
 mock.module('./web-search-mcp', () => ({
@@ -28,7 +30,6 @@ mock.module('./web-search-mcp', () => ({
 }))
 
 mock.module('../agent-collaboration-tools', () => ({
-  userRequestedSubAgents: (sessionId: string) => sessionId === 'lazy-session',
   injectAgentCollaborationMcpServer: async (
     factory: BuiltinMcpToolFactory,
     mcpServers: Record<string, Record<string, unknown>>,
@@ -169,5 +170,31 @@ describe('内置 MCP 惰性注册中心', () => {
     }
     await collaboration.load()
     expect(collaborationInjectCount).toBe(1)
+  })
+
+  test('Given 普通请求未重复提及子 Agent When 父会话启用协作 Then 保留工具以便全局规则决定是否委派', async () => {
+    collaborationInjectCount = 0
+    const servers: Record<string, Record<string, unknown>> = {}
+    const result = await injectBuiltinMcpServers({
+      ...createContext(servers, 'default', { workspaceId: 'workspace-a' }),
+      sessionId: 'ordinary-request-with-global-rules',
+    })
+    expect(result.collaborationAvailable).toBe(true)
+    expect(isLazyBuiltinMcpServerDefinition(servers.collaboration)).toBe(true)
+    expect(collaborationInjectCount).toBe(0)
+  })
+
+  test('Given 用户关闭协作开关 When 注册工具 Then 全局规则也不能重新启用能力', async () => {
+    collaborationEnabled = false
+    try {
+      const servers: Record<string, Record<string, unknown>> = {}
+      const result = await injectBuiltinMcpServers(
+        createContext(servers, 'default', { workspaceId: 'workspace-a' }),
+      )
+      expect(result.collaborationAvailable).toBe(false)
+      expect(servers.collaboration).toBeUndefined()
+    } finally {
+      collaborationEnabled = true
+    }
   })
 })

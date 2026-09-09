@@ -1,7 +1,7 @@
 /**
  * 从唯一 SVG 母版生成 Xcode 的桌面、托盘和品牌素材。
  * 使用项目已有 Electron 渲染，无需安装 ImageMagick / librsvg。
- * 旧资源路径和颜色 ID 保留，兼容已有用户的图标偏好。
+ * 保留既有品牌素材路径和颜色 ID，兼容素材下载与预览入口。
  */
 const { app, BrowserWindow } = require('electron')
 const { execFileSync } = require('node:child_process')

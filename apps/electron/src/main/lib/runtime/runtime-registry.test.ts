@@ -7,8 +7,10 @@ import {
   detectRuntime,
   listRuntimes,
   migrateRuntimeConfig,
+  resolveDefaultRuntimeHome,
   scanManagedRuntimePackages,
 } from './runtime-registry'
+import { getRuntimeHomeDir } from '../config-paths'
 
 describe('Proma Runtime Registry 契约', () => {
   test('Given 历史 Runtime 类型仍可读取 When 枚举可执行运行时 Then 只注册 Pi', () => {
@@ -66,6 +68,21 @@ describe('Proma Runtime Registry 契约', () => {
     expect(migrated.enabledRuntimeIds).toEqual(['pi'])
     expect(migrated.routedHarnesses).toEqual([])
     expect(migrated.runtimeHome).toBe('/tmp/runtime')
+  })
+
+  test('Given 新用户未显式配置 Runtime Home When 生成默认路径 Then 使用配置目录 runtime 子目录', () => {
+    const root = mkdtempSync(join(tmpdir(), 'xcodes-runtime-home-'))
+    try {
+      const configDir = join(root, 'xcodes')
+      expect(resolveDefaultRuntimeHome({}, () => getRuntimeHomeDir(configDir)))
+        .toBe(join(configDir, 'runtime'))
+      expect(resolveDefaultRuntimeHome(
+        { PROMA_RUNTIME_HOME: join(root, '.proma-runtime-explicit') },
+        () => getRuntimeHomeDir(configDir),
+      )).toBe(join(root, '.proma-runtime-explicit'))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

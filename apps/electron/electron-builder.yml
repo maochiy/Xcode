@@ -107,7 +107,7 @@ extraResources:
     to: proma-logos
     filter:
       - "**/*"
-  # 默认 Dock 图标（macOS app.dock.setIcon 使用）
+  # 默认窗口图标资源；macOS Dock 直接使用 Bundle 图标，不再支持配色覆盖。
   - from: resources/icon.png
     to: icon.png
   - from: resources/icon.icns
@@ -119,8 +119,9 @@ extraResources:
 # macOS 配置
 # ============================================
 mac:
-  # 独立 Bundle 名称，避免覆盖 Apple Xcode.app；显示名称仍为 Xcode。
-  executableName: Xcode-Desktop
+  # 安装后的 Bundle 文件名固定为小写 xcodes.app；显示名称仍为 Xcode。
+  executableName: xcodes
+  artifactName: xcodes-${version}-mac-${arch}.${ext}
   category: public.app-category.developer-tools
   icon: resources/icon.icns
   hardenedRuntime: true
@@ -158,6 +159,7 @@ dmg:
 # Windows 配置
 # ============================================
 win:
+  artifactName: xcodes-${version}-windows-${arch}.${ext}
   icon: resources/icon.ico
   fileAssociations:
     - ext: proma-backup

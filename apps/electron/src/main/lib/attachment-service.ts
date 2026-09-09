@@ -11,12 +11,13 @@
  */
 
 import { readFileSync, writeFileSync, unlinkSync, existsSync, rmSync, statSync } from 'node:fs'
-import { extname, basename, join, isAbsolute, normalize } from 'node:path'
+import { extname, basename, join, isAbsolute, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { dialog, BrowserWindow } from 'electron'
 import {
   getConfigDir,
   getConversationAttachmentsDir,
+  getLegacyConfigDir,
   resolveAttachmentPath,
 } from './config-paths'
 import type {
@@ -124,6 +125,19 @@ export function getMimeType(ext: string): string {
   return MIME_MAP[normalized] || 'application/octet-stream'
 }
 
+/** 返回候选路径在根目录内的相对路径；越界时返回 null。 */
+function relativePathWithin(root: string, candidate: string): string | null {
+  const relativePath = relative(resolve(root), resolve(candidate))
+  if (
+    isAbsolute(relativePath)
+    || relativePath === '..'
+    || relativePath.startsWith(`..${sep}`)
+  ) {
+    return null
+  }
+  return relativePath
+}
+
 /**
  * 保存附件到本地
  *
@@ -182,13 +196,24 @@ export function readAttachmentAsBase64(localPath: string): string {
   let fullPath: string
 
   if (isAbsolute(localPath)) {
-    // 绝对路径：验证在 ~/.proma/ 目录下，防止路径穿越
+    // 历史记录可能仍保存旧配置根目录的绝对路径。优先读取迁移后的同相对路径，
+    // 若副本缺失则继续读取保留的旧目录；path.relative 避免相似前缀越界。
     const configDir = getConfigDir()
-    const normalized = normalize(localPath)
-    if (!normalized.startsWith(configDir)) {
-      throw new Error(`附件路径不在安全目录内: ${localPath}`)
+    const normalized = resolve(localPath)
+    const currentRelative = relativePathWithin(configDir, normalized)
+
+    if (currentRelative !== null) {
+      fullPath = normalized
+    } else {
+      const legacyConfigDir = getLegacyConfigDir()
+      const legacyRelative = relativePathWithin(legacyConfigDir, normalized)
+      if (legacyRelative === null) {
+        throw new Error(`附件路径不在安全目录内: ${localPath}`)
+      }
+
+      const migratedPath = resolve(configDir, legacyRelative)
+      fullPath = existsSync(migratedPath) ? migratedPath : normalized
     }
-    fullPath = normalized
   } else {
     fullPath = resolveAttachmentPath(localPath)
   }

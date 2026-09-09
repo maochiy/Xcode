@@ -12,6 +12,11 @@ import { existsSync } from 'node:fs'
 interface ElectronBuilderAfterSignContext {
   appOutDir: string
   electronPlatformName: string
+  packager: {
+    appInfo: {
+      productFilename: string
+    }
+  }
 }
 
 export function smokePackagedCliAfterSign(
@@ -20,6 +25,7 @@ export function smokePackagedCliAfterSign(
   const cliPath = resolvePackagedCliPath(
     context.appOutDir,
     context.electronPlatformName,
+    { productName: context.packager.appInfo.productFilename },
   )
   if (!existsSync(cliPath)) {
     throw new Error(`afterSign: 打包产物缺少 proma CLI: ${cliPath}`)

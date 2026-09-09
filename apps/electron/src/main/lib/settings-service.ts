@@ -16,6 +16,7 @@ import type { AppSettings } from '../../types'
 interface LegacySettingsFields {
   experimentalAgentRuntimeSwitchEnabled?: boolean
   agentEffort?: unknown
+  appIconVariant?: unknown
 }
 
 function createDefaultSettings(): AppSettings {
@@ -39,26 +40,27 @@ function isSettingsRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function persistThemeMigration(
+function persistSettingsMigration(
   filePath: string,
   data: Record<string, unknown>,
   themeMode: AppSettings['themeMode'],
   themeStyle: NonNullable<AppSettings['themeStyle']>
 ): void {
-  if (data.themeMode === themeMode && data.themeStyle === themeStyle) {
+  if (data.themeMode === themeMode && data.themeStyle === themeStyle && !('appIconVariant' in data)) {
     return
   }
 
   try {
+    const { appIconVariant: _legacyIcon, ...settings } = data
     writeFileSync(filePath, JSON.stringify({
-      ...data,
+      ...settings,
       themeMode,
       themeStyle,
     }, null, 2), 'utf-8')
-    console.log(`[设置] 已迁移主题配置: ${themeMode}/${themeStyle}`)
+    console.log(`[设置] 已迁移配置: ${themeMode}/${themeStyle}`)
   } catch (error) {
     // 迁移落盘失败不应阻塞启动；当前进程仍使用规范化后的安全值。
-    console.error('[设置] 主题配置迁移写入失败:', error)
+    console.error('[设置] 配置迁移写入失败:', error)
   }
 }
 
@@ -82,17 +84,18 @@ export function getSettings(): AppSettings {
     }
     const data = parsed as Record<string, unknown> & Partial<AppSettings> & LegacySettingsFields
     const themeSelection = normalizeThemeSelection(data.themeMode, data.themeStyle)
-    persistThemeMigration(
+    persistSettingsMigration(
       filePath,
       data,
       themeSelection.themeMode,
       themeSelection.themeStyle
     )
 
-    // 读取时清理旧 Runtime Selector 与独立 effort 设置。
+    // 清理已移除的图标配色、旧 Runtime Selector 与独立 effort 设置。
     const {
       experimentalAgentRuntimeSwitchEnabled: _legacyRuntimeSwitch,
       agentEffort: _legacyAgentEffort,
+      appIconVariant: _legacyIcon,
       ...settings
     } = data
     return {
@@ -124,7 +127,8 @@ export function getSettings(): AppSettings {
  */
 export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   const current = getSettings()
-  const normalizedUpdates = { ...updates }
+  // 旧客户端或导入数据也不能重新写入已移除的图标配色。
+  const { appIconVariant: _legacyIcon, ...normalizedUpdates } = updates as Partial<AppSettings> & LegacySettingsFields
 
   if (updates.themeMode !== undefined || updates.themeStyle !== undefined) {
     const themeSelection = normalizeThemeSelection(

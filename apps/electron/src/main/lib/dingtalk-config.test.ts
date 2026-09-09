@@ -39,8 +39,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
-  mkdirSync(join(tempHome, '.proma'), { recursive: true })
+  rmSync(join(tempHome, 'xcodes'), { recursive: true, force: true })
+  mkdirSync(join(tempHome, 'xcodes'), { recursive: true })
 })
 
 afterAll(() => {

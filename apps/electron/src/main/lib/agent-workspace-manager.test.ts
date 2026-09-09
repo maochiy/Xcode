@@ -38,9 +38,9 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
+  rmSync(join(tempHome, 'xcodes'), { recursive: true, force: true })
   rmSync(join(tempHome, 'projects'), { recursive: true, force: true })
-  mkdirSync(join(tempHome, '.proma'), { recursive: true })
+  mkdirSync(join(tempHome, 'xcodes'), { recursive: true })
   mkdirSync(join(tempHome, 'projects'), { recursive: true })
 })
 
@@ -181,7 +181,7 @@ describe('Agent 工作区创建', () => {
     )
 
     expect(manager.listAgentWorkspaces()).toEqual([])
-    const backup = readdirSync(join(tempHome, '.proma')).find((name) =>
+    const backup = readdirSync(join(tempHome, 'xcodes')).find((name) =>
       name.startsWith('legacy-agent-workspaces-index-'),
     )
     expect(backup).toBeDefined()

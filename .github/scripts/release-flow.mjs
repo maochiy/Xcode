@@ -14,6 +14,7 @@ import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const EXPECTED_PRODUCT_NAME = 'Xcode'
+const INSTALL_ARTIFACT_NAME = 'xcodes'
 const EXPECTED_REPOSITORY = 'maochiy/Xcode'
 
 function fail(message) {
@@ -71,7 +72,7 @@ export function validateReleaseConfig({
 }
 
 function assetBase(version, platform, arch) {
-  return `${EXPECTED_PRODUCT_NAME}-${version}-${platform}-${arch}`
+  return `${INSTALL_ARTIFACT_NAME}-${version}-${platform}-${arch}`
 }
 
 export function buildAssetNames(tag, platform, arch) {

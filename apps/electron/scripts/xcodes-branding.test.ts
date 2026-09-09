@@ -14,7 +14,7 @@ function readPngSize(buffer: Buffer): [number, number] {
 
 describe('Xcode 品牌交付', () => {
   test('Given 应用改名 When 定位 macOS 内核与 CLI Then 使用独立 Bundle 且保留 CLI 协议名', () => {
-    const root = resolve('/output', 'Xcode-Desktop.app', 'Contents', 'Resources')
+    const root = resolve('/output', 'xcodes.app', 'Contents', 'Resources')
     expect(resolvePackagedResourcesRoot('/output', 'darwin')).toBe(root)
     expect(resolvePackagedCliPath('/output', 'darwin')).toBe(resolve(root, 'bin/proma'))
     const config = readFileSync(resolve(appDirectory, 'electron-builder.yml'), 'utf8')
@@ -39,7 +39,7 @@ describe('Xcode 品牌交付', () => {
     }
   })
 
-  test('Given 用户已有配色偏好 When 切换图标或下载品牌素材 Then 两个入口提供同一新版图标', () => {
+  test('Given 品牌素材随应用分发 When 读取内置素材与预览 Then 两处内容保持一致', () => {
     const files = readdirSync(resolve(resources, 'proma-logos'))
       .filter((name) => name.startsWith('proma-') && name.endsWith('.png'))
     expect(files).toHaveLength(14)

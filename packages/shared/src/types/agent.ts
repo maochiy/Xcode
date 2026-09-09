@@ -298,9 +298,9 @@ export interface AgentRuntimeModelCatalogDraftInput {
 }
 
 /**
- * 自定义子代理定义
+ * 历史自定义子代理定义，仅保留旧数据兼容。
  *
- * 通过 CCB Agent Definitions 注册可被 Agent 工具调用的自定义子代理。
+ * @deprecated 新实现请使用 RegisteredAgent 与 Proma 注册配置；该类型不会恢复 CCB 注册能力。
  */
 export interface AgentDefinition {
   /** 自然语言描述，说明何时使用该代理 */
@@ -941,6 +941,8 @@ export interface AgentSessionMeta {
   delegationDepth?: number
   /** 委派目标摘要，便于 UI 展示和追溯 */
   delegationGoal?: string
+  /** 创建协作子会话时固化的注册 Agent 运行参数；不包含任何凭据。 */
+  registeredAgentSnapshot?: RegisteredAgentRuntimeSnapshot
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -963,6 +965,27 @@ export type AgentDelegationRole = 'explore' | 'research' | 'implement' | 'review
 
 /** Agent 委派子会话的运行状态（interrupted：应用退出时仍在运行，重启后无法续跑） */
 export type AgentDelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+
+/** Runtime 强制执行的工具可用范围。disallowedTools 始终优先。 */
+export interface AgentRuntimeToolPolicy {
+  allowedTools?: string[]
+  disallowedTools?: string[]
+}
+
+/** 注册 Agent 在委派创建时固化的运行参数快照，不包含任何凭据。 */
+export interface RegisteredAgentRuntimeSnapshot {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  role?: AgentDelegationRole
+  modelId?: string
+  permissionMode?: PromaPermissionMode
+  effortLevel?: ThinkingEffortLevel
+  tools?: string[]
+  disallowedTools?: string[]
+  maxTurns?: number
+}
 
 /**
  * Agent 持久化消息
@@ -1307,6 +1330,12 @@ export interface AgentSendInput {
     thinkingConfig?: ThinkingConfig
     effortLevel?: ThinkingEffortLevel
   }
+  /** 注册 Agent 系统提示词覆盖层，仅由 Main 进程从持久化快照注入。 */
+  registeredAgentSystemPrompt?: string
+  /** 注册 Agent 工具限制，仅由 Main 进程从持久化快照注入。 */
+  runtimeToolPolicy?: AgentRuntimeToolPolicy
+  /** 注册 Agent 最大运行轮次，仅由 Main 进程从持久化快照注入。 */
+  maxTurnsOverride?: number
   /** 附加的外部目录（绝对路径，传递给 SDK additionalDirectories） */
   additionalDirectories?: string[]
   /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */

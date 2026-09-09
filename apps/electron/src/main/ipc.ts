@@ -11,8 +11,8 @@ import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSyn
 import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { registerIntegratedTerminalIpcHandlers } from './lib/integrated-terminal-manager'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, TASKBOARD_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
-import { USER_PROFILE_IPC_CHANNELS, NEW_API_AUTH_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_REGISTRATION_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, FEEDBACK_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RUNTIME_IPC_CHANNELS, TASKBOARD_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { USER_PROFILE_IPC_CHANNELS, NEW_API_AUTH_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
   NewApiApiKeyLoginInput,
@@ -51,6 +51,8 @@ import type {
   FileOrDirectoryDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
+  AgentRegistrationConfig,
+  AgentRegistrationUpdate,
   AgentRuntimeModelCatalog,
   AgentRuntimeModelCatalogDraftInput,
   RuntimeSkillCatalog,
@@ -204,6 +206,10 @@ import {
   logoutNewApi,
 } from './lib/new-api-auth-service'
 import { getSettings, updateSettings } from './lib/settings-service'
+import {
+  getAgentRegistrationConfig,
+  saveAgentRegistrationConfig,
+} from './lib/agent-registration-service'
 import { setBuiltinMcpUserEnabled } from './lib/builtin-mcp/settings'
 import { clearBrowserSessionData } from './lib/browser/browser-webview.cjs'
 import { setDockBadgeCount } from './lib/dock-badge-service'
@@ -1153,17 +1159,6 @@ async function openPathWithApp(absPath: string, appName?: string): Promise<void>
     return
   }
   await shell.openPath(absPath)
-}
-
-/**
- * 解析应用图标变体的文件路径
- */
-export function resolveAppIconPath(variantId: string): string | null {
-  const resourcesDir = getBundledResourcesDir()
-  if (!variantId || variantId === 'default') {
-    return join(resourcesDir, 'icon.png')
-  }
-  return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
 async function synchronizeNewApiLoginResult(
@@ -2242,35 +2237,6 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // ===== 应用图标切换 =====
-
-  ipcMain.handle(
-    APP_ICON_IPC_CHANNELS.SET,
-    async (_, variantId: string): Promise<boolean> => {
-      try {
-        // 解析图标文件路径
-        const iconPath = resolveAppIconPath(variantId)
-        if (!iconPath || !existsSync(iconPath)) {
-          console.warn('[图标] 图标文件不存在:', iconPath)
-          return false
-        }
-
-        // macOS: 设置 Dock 图标
-        if (process.platform === 'darwin' && app.dock) {
-          app.dock.setIcon(iconPath)
-        }
-
-        // 持久化到设置
-        await updateSettings({ appIconVariant: variantId })
-        console.log(`[图标] 已切换到: ${variantId}`)
-        return true
-      } catch (error) {
-        console.error('[图标] 切换失败:', error)
-        return false
-      }
-    }
-  )
-
   // ===== Dock/Launcher 角标 =====
 
   ipcMain.handle(
@@ -2362,6 +2328,16 @@ export function registerIpcHandlers(): void {
   )
 
   // ===== Agent 会话管理相关 =====
+
+  ipcMain.handle(
+    AGENT_REGISTRATION_IPC_CHANNELS.GET,
+    (): AgentRegistrationConfig => getAgentRegistrationConfig(),
+  )
+  ipcMain.handle(
+    AGENT_REGISTRATION_IPC_CHANNELS.SAVE,
+    (_, input: AgentRegistrationUpdate): AgentRegistrationConfig =>
+      saveAgentRegistrationConfig(input),
+  )
 
   // 获取 Agent 会话列表
   ipcMain.handle(

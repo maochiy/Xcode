@@ -10,14 +10,22 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Blocks, Search, Plus, Store, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
-import { agentSkillsTabAtom } from '@/atoms/active-view'
+import {
+  agentSkillsTabAtom,
+  getAgentSkillsSearchPlaceholder,
+  shouldConfirmAgentRegistrationTabLeave,
+} from '@/atoms/active-view'
+import {
+  agentRegistrationDirtyAtom,
+  agentRegistrationDraftAtom,
+} from '@/atoms/agent-registration'
 import { settingsOpenAtom, settingsTabAtom, toolSettingsFocusAtom, type ToolSettingsFocus } from '@/atoms/settings-tab'
 import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@proma/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
@@ -28,6 +36,7 @@ import { McpDetailSheet } from './McpDetailSheet'
 import { BuiltinMcpDetailSheet } from './BuiltinMcpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
 import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
+import { AgentRegistrationsTab } from './AgentRegistrationsTab'
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData()
@@ -37,6 +46,8 @@ export function AgentSkillsView(): React.ReactElement {
   const setToolSettingsFocus = useSetAtom(toolSettingsFocusAtom)
 
   const [tab, setTab] = useAtom(agentSkillsTabAtom)
+  const registrationDirty = useAtomValue(agentRegistrationDirtyAtom)
+  const registrationDraft = useAtomValue(agentRegistrationDraftAtom)
   const [search, setSearch] = React.useState('')
   const [selectedSkillSlug, setSelectedSkillSlug] = React.useState<string | null>(null)
   const [mcpSheetOpen, setMcpSheetOpen] = React.useState(false)
@@ -97,6 +108,7 @@ export function AgentSkillsView(): React.ReactElement {
     [data.mcpConfig, data.builtinMcpServers],
   )
   const memoryCount = (data.capabilities?.memory.claudeMd.exists ? 1 : 0) + (data.capabilities?.memory.autoMemory.fileCount ?? 0)
+  const agentCount = registrationDraft?.agents.length ?? 0
 
   const selectedSkill = data.skills.find((s) => s.slug === selectedSkillSlug) ?? null
   const selectedIsBuiltin = selectedSkill ? isBuiltinSkill(selectedSkill) : false
@@ -134,18 +146,14 @@ export function AgentSkillsView(): React.ReactElement {
     setSelectedBuiltinMcp(null)
   }, [setSettingsOpen, setSettingsTab, setToolSettingsFocus])
 
-  if (!data.hasWorkspace) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
-          <Blocks className="size-8 text-foreground/30" />
-        </div>
-        <div className="text-[15px] font-medium text-foreground/80">未选择工作区</div>
-        <div className="max-w-sm text-[13px] text-foreground/50">
-          请先在 Agent 模式下添加并选择一个本机已有项目，再来管理它的 Skills 与 MCP。
-        </div>
-      </div>
-    )
+  const handleTabChange = (nextTab: typeof tab): void => {
+    if (
+      shouldConfirmAgentRegistrationTabLeave(tab, nextTab, registrationDirty)
+      && !window.confirm('全局 AGENTS.md 规则尚未保存。离开后修改会暂时保留，确定切换页面吗？')
+    ) {
+      return
+    }
+    setTab(nextTab)
   }
 
   return (
@@ -163,24 +171,26 @@ export function AgentSkillsView(): React.ReactElement {
 
       {/* 工具条 */}
       <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 items-center gap-3 px-8 pb-4">
-        {/* Skills / MCP / 记忆切换 */}
+        {/* Skills / MCP / 记忆 / Agents 切换 */}
         <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
           <div
             className={cn(
-              'absolute bottom-0.5 top-0.5 w-[calc(33.333%-3px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
+              'absolute bottom-0.5 top-0.5 w-[calc(25%-2px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
               tab === 'skills' && 'translate-x-0',
               tab === 'mcp' && 'translate-x-full',
               tab === 'memory' && 'translate-x-[200%]',
+              tab === 'agents' && 'translate-x-[300%]',
             )}
           />
           {([
             { value: 'skills' as const, label: 'Skills', count: data.skills.length },
             { value: 'mcp' as const, label: 'MCP', count: mcpCount },
             { value: 'memory' as const, label: '记忆', count: memoryCount },
+            { value: 'agents' as const, label: 'Agents', count: agentCount },
           ]).map(({ value, label, count }) => (
             <button
               key={value}
-              onClick={() => setTab(value)}
+              onClick={() => handleTabChange(value)}
               className={cn(
                 'relative z-[1] flex min-w-[96px] items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-medium transition-colors duration-200',
                 tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
@@ -198,7 +208,7 @@ export function AgentSkillsView(): React.ReactElement {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : '搜索记忆文件...'}
+            placeholder={getAgentSkillsSearchPlaceholder(tab)}
             className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
           />
         </div>
@@ -264,7 +274,11 @@ export function AgentSkillsView(): React.ReactElement {
       {/* 内容 */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         <div className="mx-auto w-full max-w-6xl px-8 pb-10">
-          {data.loading ? (
+          {!data.hasWorkspace && tab !== 'agents' ? (
+            <WorkspaceRequiredState />
+          ) : tab === 'agents' ? (
+            <AgentRegistrationsTab search={search} />
+          ) : data.loading ? (
             <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
           ) : tab === 'skills' ? (
             <SkillsTab
@@ -370,6 +384,20 @@ export function AgentSkillsView(): React.ReactElement {
         installedSkills={data.skills.filter((skill) => !skill.runtimeReadOnly)}
         onImported={() => bumpCapabilities((v) => v + 1)}
       />
+    </div>
+  )
+}
+
+function WorkspaceRequiredState(): React.ReactElement {
+  return (
+    <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 text-center">
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
+        <Blocks className="size-8 text-foreground/30" />
+      </div>
+      <div className="text-[15px] font-medium text-foreground/80">未选择工作区</div>
+      <div className="max-w-sm text-[13px] leading-5 text-foreground/50">
+        Skills、MCP 与记忆按工作区管理。你仍可切换到 Agents，配置全局注册角色与 AGENTS.md 规则。
+      </div>
     </div>
   )
 }

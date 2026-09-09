@@ -53,6 +53,11 @@
             "toggleable": true,
             "tools": [
                 {
+                    "name": "list_registered_agents",
+                    "description": "列出已启用的注册 Agent 角色、适用说明和运行配置，委派时使用真实 agentId。",
+                    "readOnly": true
+                },
+                {
                     "name": "list_available_agent_models",
                     "description": "列出当前渠道下可用于协作子 Agent 的模型。",
                     "readOnly": true

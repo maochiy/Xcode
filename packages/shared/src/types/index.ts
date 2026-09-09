@@ -26,6 +26,9 @@ export * from './chat'
 // Agent 相关类型
 export * from './agent'
 
+// 子 Agent 注册配置相关类型
+export * from './agent-registration'
+
 // Agent Provider 适配器接口
 export * from './agent-provider'
 

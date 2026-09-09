@@ -229,8 +229,6 @@ export interface AppSettings {
   markdownFontSize?: MarkdownFontSize
   /** 上次是否在 Scratch Pad 页（用于重启恢复） */
   scratchPadActive?: boolean
-  /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */
-  appIconVariant?: string
   /** 语音输入设置（Access Token 以加密态存储，由专用服务解密后返回渲染进程） */
   voiceDictation?: VoiceDictationPersistedSettings
   /** 飞书 Session 镜像设置：每个 Proma Session 可创建一个仅包含用户与指定 Bot 的飞书群 */
@@ -293,12 +291,6 @@ export const SCRATCH_PAD_IPC_CHANNELS = {
   CHOOSE_EXPORT_PATH: 'scratch-pad:choose-export-path',
   /** 将图片写入系统剪贴板 */
   COPY_IMAGE: 'scratch-pad:copy-image',
-} as const
-
-/** 应用图标 IPC 通道 */
-export const APP_ICON_IPC_CHANNELS = {
-  /** 设置应用图标（variant ID） */
-  SET: 'app-icon:set',
 } as const
 
 /** Dock/Launcher 角标 IPC 通道 */

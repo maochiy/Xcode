@@ -20,7 +20,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 export type ElectronBuilderPlatform = 'darwin' | 'linux' | 'win32' | string
 
 export interface PackagedCliPathOptions {
-  /** electron-builder macOS 应用包文件名（不含 .app），默认 Xcode-Desktop */
+  /** electron-builder macOS 应用包文件名（不含 .app），默认 xcodes */
   productName?: string
 }
 
@@ -43,7 +43,7 @@ export interface EnsureMacCliCodeSignatureOptions {
 export interface SmokeTestPromaCliOptions {
   run?: RunCommand
   timeoutMs?: number
-  /** 隔离配置目录，避免依赖本机 ~/.proma */
+  /** 隔离配置目录，避免依赖本机 ~/xcodes */
   configDir?: string
 }
 
@@ -62,7 +62,7 @@ function defaultRun(options: RunCommandOptions): SpawnSyncReturns<string> {
 /**
  * 解析 electron-builder afterPack 产物中的 proma CLI 路径。
  *
- * - macOS: <appOutDir>/Xcode-Desktop.app/Contents/Resources/bin/proma
+ * - macOS: <appOutDir>/xcodes.app/Contents/Resources/bin/proma
  * - Windows: <appOutDir>/resources/bin/proma.exe
  * - Linux: <appOutDir>/resources/bin/proma
  */
@@ -71,7 +71,7 @@ export function resolvePackagedCliPath(
   electronPlatformName: ElectronBuilderPlatform,
   options: PackagedCliPathOptions = {},
 ): string {
-  const productName = options.productName ?? 'Xcode-Desktop'
+  const productName = options.productName ?? 'xcodes'
   const binName = electronPlatformName === 'win32' ? 'proma.exe' : 'proma'
 
   if (electronPlatformName === 'darwin') {
@@ -191,6 +191,7 @@ export function smokeTestPromaCli(
 
   try {
     const env: NodeJS.ProcessEnv = { ...process.env }
+    delete env.XCODE_DEV
     delete env.PROMA_DEV
 
     let result: SpawnSyncReturns<string> | undefined

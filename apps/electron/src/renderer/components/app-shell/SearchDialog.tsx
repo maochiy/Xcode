@@ -39,6 +39,7 @@ import type {
   MessageSearchResult,
   AgentMessageSearchResult,
 } from '@proma/shared'
+import { getConfigDirectoryName } from '@proma/shared/config'
 
 /** 标题搜索结果项 */
 interface TitleResult {
@@ -359,7 +360,7 @@ export function SearchDialog(): React.ReactElement {
     )
     const channelId = deepseekChannel?.id ?? currentAgentChannelId ?? undefined
 
-    const configDir = import.meta.env.DEV ? '.proma-dev' : '.proma'
+    const configDir = getConfigDirectoryName(import.meta.env.DEV)
     const prompt = `请帮我在 Xcode 的全部会话历史中搜索与以下描述相关的内容：
 
 "${q}"

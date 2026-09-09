@@ -10,9 +10,14 @@ import {
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { getConfigDirectoryName } from '@proma/shared/config'
 
 const IDENTITY_NAME = 'Proma Local Development'
-const SIGNING_DIRECTORY = join(homedir(), '.proma', 'local-signing')
+const SIGNING_DIRECTORY = join(
+  homedir(),
+  getConfigDirectoryName(true),
+  'local-signing',
+)
 const KEYCHAIN_PATH = join(
   SIGNING_DIRECTORY,
   'PromaLocalSigning.keychain-db',

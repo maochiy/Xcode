@@ -311,6 +311,104 @@ function runPayload({
   };
 }
 
+test('Given 同一原生会话连续两轮更新宿主规则 When 第二轮运行 Then 从 sessionFile 恢复历史并使用最新系统提示词', {
+  timeout: 30_000,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-host-prompt-refresh-'));
+  const cwd = path.join(root, 'workspace');
+  mkdirSync(cwd, { recursive: true });
+  const server = await startOpenAiServer([
+    async (response, index) => writeTextResponse(response, index, '第一轮完成'),
+    async (response, index) => writeTextResponse(response, index, '第二轮完成'),
+  ]);
+  const first = {
+    ...runPayload({
+      baseUrl: server.baseUrl,
+      cwd,
+      agentDir: path.join(root, 'agent'),
+      sessionRoot: path.join(root, 'sessions'),
+      runId: 'host-prompt-first',
+      sessionId: 'host-prompt-session',
+      prompt: '执行第一轮',
+    }),
+    hostSystemPrompt: 'HOST_RULE_FIRST_ONLY',
+  };
+  const bridge = createPiBridge({
+    workerPath,
+    env: isolatedWorkerEnv(root),
+    runtimeBinding: first.runtimeBinding,
+    toolHandler: async () => { throw new Error('规则刷新测试禁止工具调用'); },
+  });
+  try {
+    const recorder = createEventRecorder(bridge);
+    const accepted = await bridge.startRun(first);
+    await recorder.terminal(first.runId);
+    await bridge.startRun({
+      ...first,
+      runId: 'host-prompt-second',
+      sessionFile: accepted.sessionFile,
+      prompt: '执行第二轮',
+      hostSystemPrompt: 'HOST_RULE_SECOND_ONLY',
+    });
+    await recorder.terminal('host-prompt-second');
+
+    assert.ok(JSON.stringify(server.requests[0].body.messages).includes('HOST_RULE_FIRST_ONLY'));
+    assert.ok(JSON.stringify(server.requests[1].body.messages).includes('HOST_RULE_SECOND_ONLY'));
+    assert.equal(JSON.stringify(server.requests[1].body.messages).includes('HOST_RULE_FIRST_ONLY'), false);
+  } finally {
+    await bridge.close().catch(() => {});
+    await server.close().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Given 注册 Agent 最大轮次为一轮 When 首轮请求工具后仍需继续 Then 执行完当前工具并阻止第二次模型调用', {
+  timeout: 30_000,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-max-turns-'));
+  const cwd = path.join(root, 'workspace');
+  mkdirSync(cwd, { recursive: true });
+  const fixturePath = path.join(cwd, 'fixture.txt');
+  writeFileSync(fixturePath, 'MAX_TURNS_FIXTURE');
+  const server = await startOpenAiServer([
+    async (response, index) => writeReadToolResponse(response, index, fixturePath),
+    async (response, index) => writeTextResponse(response, index, '不应发起第二轮模型调用'),
+  ]);
+  const payload = {
+    ...runPayload({
+      baseUrl: server.baseUrl,
+      cwd,
+      agentDir: path.join(root, 'agent'),
+      sessionRoot: path.join(root, 'sessions'),
+      runId: 'max-turns-run',
+      sessionId: 'max-turns-session',
+      prompt: '读取文件后继续总结',
+    }),
+    maxTurns: 1,
+  };
+  const bridge = createPiBridge({
+    workerPath,
+    env: isolatedWorkerEnv(root),
+    runtimeBinding: payload.runtimeBinding,
+    toolHandler: async (name) => {
+      assert.equal(name, 'proma_permission_check');
+      return { behavior: 'allow' };
+    },
+  });
+  try {
+    const recorder = createEventRecorder(bridge);
+    await bridge.startRun(payload);
+    const terminal = await recorder.terminal(payload.runId, 'run.failed');
+    assert.equal(terminal.event.type, 'run.failed');
+    assert.equal(terminal.event.payload.code, 'PI_MAX_TURNS_REACHED');
+    assert.equal(server.requests.length, 1);
+  } finally {
+    await bridge.close().catch(() => {});
+    await server.close().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Given 短会话 When 手动压缩 Then 返回无需压缩且不调用模型或改写上下文', {
   timeout: 30_000,
 }, async () => {

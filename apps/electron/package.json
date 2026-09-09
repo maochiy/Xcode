@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "productName": "Xcode",
   "description": "Xcode next gen ai software with general agents - Electron App",
   "main": "dist/main.cjs",

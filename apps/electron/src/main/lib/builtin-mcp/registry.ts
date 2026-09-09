@@ -140,18 +140,12 @@ export async function injectBuiltinMcpServers(
     })
   }
 
-  // 子 Agent 硬开关保持原约束：设置开启、有工作区、非委派会话、深度为 0，
-  // 且当前真实用户消息明确要求多/并行子 Agent。
-  let collaborationAvailable = false
-  const collaborationContextAvailable = isBuiltinMcpUserEnabled('collaboration')
+  // 开关只决定能力是否可用；是否委派由当前用户要求和全局 AGENTS.md 规则决定。
+  // 不再用本轮关键词屏蔽工具，否则持久化协作规则无法在后续普通请求中生效。
+  const collaborationAvailable = isBuiltinMcpUserEnabled('collaboration')
     && !!ctx.workspaceId
     && ctx.triggeredBy !== 'delegation'
     && (ctx.sessionMeta?.delegationDepth ?? 0) === 0
-
-  if (collaborationContextAvailable) {
-    const { userRequestedSubAgents } = await import('../agent-collaboration-tools')
-    collaborationAvailable = userRequestedSubAgents(ctx.sessionId)
-  }
 
   if (collaborationAvailable) {
     registerLazyBuiltin(ctx, {

@@ -15,14 +15,14 @@ import {
 import { smokeTestPromaCli } from './packaged-cli-guard'
 
 const appDir = resolve(import.meta.dir, '..')
-const defaultAppPath = join(appDir, 'out', `mac-${process.arch}`, 'Xcode-Desktop.app')
+const defaultAppPath = join(appDir, 'out', `mac-${process.arch}`, 'xcodes.app')
 const appPath = resolve(process.argv[2] ?? defaultAppPath)
 const outputDmgPath = resolve(
   process.argv[3]
     ?? join(
       appDir,
       'out',
-      `Xcode-${pkg.version}-${process.arch}-local-signed.dmg`,
+      `xcodes-${pkg.version}-mac-${process.arch}.dmg`,
     ),
 )
 const entitlementsPath = join(appDir, 'resources', 'entitlements.mac.plist')

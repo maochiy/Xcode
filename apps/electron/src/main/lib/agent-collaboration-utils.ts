@@ -8,8 +8,12 @@ import {
   PROMA_DEFAULT_PERMISSION_MODE,
   type AgentDelegationRole,
   type AgentDelegationStatus,
+  type AgentRuntimeToolPolicy,
+  type AgentSendInput,
   type AgentSessionMeta,
   type PromaPermissionMode,
+  type RegisteredAgentRuntimeSnapshot,
+  type ThinkingEffortLevel,
 } from '@proma/shared'
 
 const PERMISSION_RANK: Record<PromaPermissionMode, number> = {
@@ -40,6 +44,14 @@ export function resolveDelegationPermissionMode(
   const parent = parentMode ?? PROMA_DEFAULT_PERMISSION_MODE
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent
+}
+
+function mostRestrictivePermissionMode(
+  ...modes: Array<PromaPermissionMode | undefined>
+): PromaPermissionMode | undefined {
+  return modes
+    .filter((mode): mode is PromaPermissionMode => mode !== undefined)
+    .sort((left, right) => PERMISSION_RANK[left] - PERMISSION_RANK[right])[0]
 }
 
 export function buildRecoveredDelegationState(input: {
@@ -115,14 +127,65 @@ ${sharedContext}
 ${task}`
 }
 
-/**
- * 子 Agent 硬开关意图关键词：仅当用户在当前对话明确表达「开启多个/并行子智能体」
- * 类意图时才允许创建协作子会话。Claude Code / Codex 运行时内部派生子 Agent
- * （Task / collabAgentToolCall）走各自 SDK 通道，不经过此开关，不受限制。
- */
-const SUBAGENT_INTENT_PATTERN = /(多(个|智能体|Agent|代理)|并行|同时(派|开|起)|子\s*(Agent|智能体|代理)|子会话|spawn|sub[\s-]?agent|delegate|多路|几个\s*(Agent|智能体)|一起(协作|处理|干活)|分工|各(自)?负责)/i
+interface RegisteredAgentDefinitionLike {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  role?: AgentDelegationRole
+  modelId?: string
+  permissionMode?: PromaPermissionMode
+  effortLevel?: ThinkingEffortLevel
+  tools?: string[]
+  disallowedTools?: string[]
+  maxTurns?: number
+}
 
-/** 文本是否含「开启子 Agent」意图（纯函数，便于测试） */
-export function hasSubAgentIntent(text: string): boolean {
-  return SUBAGENT_INTENT_PATTERN.test(text)
+/** 固化注册定义，防止后续编辑改变已创建子会话的运行边界。 */
+export function snapshotRegisteredAgent(
+  definition: RegisteredAgentDefinitionLike,
+): RegisteredAgentRuntimeSnapshot {
+  return {
+    id: definition.id,
+    name: definition.name,
+    description: definition.description,
+    prompt: definition.prompt,
+    ...(definition.role ? { role: definition.role } : {}),
+    ...(definition.modelId ? { modelId: definition.modelId } : {}),
+    ...(definition.permissionMode ? { permissionMode: definition.permissionMode } : {}),
+    ...(definition.effortLevel ? { effortLevel: definition.effortLevel } : {}),
+    ...(definition.tools ? { tools: [...definition.tools] } : {}),
+    ...(definition.disallowedTools ? { disallowedTools: [...definition.disallowedTools] } : {}),
+    ...(definition.maxTurns != null ? { maxTurns: definition.maxTurns } : {}),
+  }
+}
+
+/** 把持久化快照转换为真正参与 Runtime 查询的输入参数。 */
+export function applyRegisteredAgentRuntimeSnapshot(
+  input: AgentSendInput,
+  snapshot: RegisteredAgentRuntimeSnapshot | undefined,
+  parentPermissionMode?: PromaPermissionMode,
+): AgentSendInput {
+  if (!snapshot) return input
+  const toolPolicy: AgentRuntimeToolPolicy = {
+    ...(snapshot.tools ? { allowedTools: [...snapshot.tools] } : {}),
+    ...(snapshot.disallowedTools ? { disallowedTools: [...snapshot.disallowedTools] } : {}),
+  }
+  const effectivePermissionMode = mostRestrictivePermissionMode(
+    snapshot.permissionMode,
+    input.permissionModeOverride,
+    parentPermissionMode,
+  )
+  return {
+    ...input,
+    ...(snapshot.modelId ? { modelId: snapshot.modelId } : {}),
+    ...(effectivePermissionMode ? { permissionModeOverride: effectivePermissionMode } : {}),
+    runtimeThinking: {
+      ...input.runtimeThinking,
+      ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}),
+    },
+    registeredAgentSystemPrompt: snapshot.prompt,
+    ...(Object.keys(toolPolicy).length > 0 ? { runtimeToolPolicy: toolPolicy } : {}),
+    ...(snapshot.maxTurns != null ? { maxTurnsOverride: snapshot.maxTurns } : {}),
+  }
 }

@@ -22,6 +22,7 @@ const IGNORED_OPEN_APP_NAMES = new Set([
   'Finder',
   'Proma',
   'Xcodes',
+  'xcodes',
   'Xcode-Desktop',
   'Google Chrome',
   'Safari',
@@ -96,7 +97,7 @@ export function mergeOpenAppOptions(apps: DefaultAppInfo[]): OpenAppOption[] {
 
   for (const app of hydrated) {
     if (!app.name || IGNORED_OPEN_APP_NAMES.has(app.name)) continue
-    if (/(?:^|[\\/])Xcode-Desktop\.app(?:[\\/]|$)/i.test(app.appPath)) continue
+    if (/(?:^|[\\/])(?:Xcode-Desktop|xcodes)\.app(?:[\\/]|$)/i.test(app.appPath)) continue
     add(app.name, 'app', app.appPath, app.iconDataUrl)
   }
 

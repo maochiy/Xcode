@@ -34,6 +34,7 @@ import type {
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
   AgentRuntimeSessionSummary,
+  RegisteredAgentRuntimeSnapshot,
 } from '@proma/shared'
 import { migratePermissionMode } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
@@ -1449,7 +1450,7 @@ export function mergeAgentSessionSDKMessages(
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'draft' | 'titleSource' | 'channelId' | 'modelId' | 'runtimeId' | 'runtimeSessionId' | 'runtimeVersion' | 'runtimeArtifactCommit' | 'runtimeProtocolVersion' | 'runtimeLastSequence' | 'runtimeWorkerState' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'dispatchState' | 'lastStopDurationMs' | 'permissionMode' | 'planModeEnabled' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'taskboardTaskId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'draft' | 'titleSource' | 'channelId' | 'modelId' | 'runtimeId' | 'runtimeSessionId' | 'runtimeVersion' | 'runtimeArtifactCommit' | 'runtimeProtocolVersion' | 'runtimeLastSequence' | 'runtimeWorkerState' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'dispatchState' | 'lastStopDurationMs' | 'permissionMode' | 'planModeEnabled' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'taskboardTaskId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'registeredAgentSnapshot'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -1683,10 +1684,12 @@ export async function createForkedAgentSessionProjection(
   const sourceMeta = getAgentSessionMeta(input.sessionId)
   if (!sourceMeta) throw new Error(`源 Agent 会话不存在: ${input.sessionId}`)
 
-  const forkModelId = input.modelId !== undefined
+  // 注册定义固定模型时，fork 仍属于同一注册角色，不能通过 fork 参数改写。
+  const requestedForkModelId = sourceMeta.registeredAgentSnapshot?.modelId ?? input.modelId
+  const forkModelId = requestedForkModelId !== undefined
     ? assertEnabledModelForChannel({
         channelId: sourceMeta.channelId,
-        modelId: input.modelId,
+        modelId: requestedForkModelId,
         purpose: '分叉 Agent 会话',
       })
     : sourceMeta.modelId
@@ -1702,6 +1705,15 @@ export async function createForkedAgentSessionProjection(
     const updated = updateAgentSessionMeta(newMeta.id, {
       runtimeSessionId,
       permissionMode: sourceMeta.permissionMode,
+      planModeEnabled: sourceMeta.planModeEnabled,
+      parentSessionId: sourceMeta.parentSessionId,
+      rootSessionId: sourceMeta.rootSessionId,
+      delegationRole: sourceMeta.delegationRole,
+      delegationDepth: sourceMeta.delegationDepth,
+      delegationGoal: sourceMeta.delegationGoal,
+      registeredAgentSnapshot: cloneRegisteredAgentRuntimeSnapshot(
+        sourceMeta.registeredAgentSnapshot,
+      ),
     })
     const destDir = getAgentSessionAttachmentsDir(newMeta.id)
     if (existsSync(sourceDir)) {
@@ -1721,6 +1733,17 @@ export async function createForkedAgentSessionProjection(
   } catch (error) {
     try { deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
     throw error
+  }
+}
+
+function cloneRegisteredAgentRuntimeSnapshot(
+  snapshot: RegisteredAgentRuntimeSnapshot | undefined,
+): RegisteredAgentRuntimeSnapshot | undefined {
+  if (!snapshot) return undefined
+  return {
+    ...snapshot,
+    ...(snapshot.tools ? { tools: [...snapshot.tools] } : {}),
+    ...(snapshot.disallowedTools ? { disallowedTools: [...snapshot.disallowedTools] } : {}),
   }
 }
 

@@ -484,7 +484,7 @@ async function bootstrap(): Promise<void> {
   // 必须在其他初始化之前执行，确保环境变量正确加载
   await safeAwait('initializeRuntime', () => initializeRuntime())
 
-  // 同步默认 Skills 模板到 ~/.proma/default-skills/
+  // 同步默认 Skills 模板到 ~/xcodes/default-skills/
   safeRun('seedDefaultSkills', seedDefaultSkills)
 
   // 升级所有工作区中版本过旧的默认 Skills
@@ -504,16 +504,12 @@ async function bootstrap(): Promise<void> {
   // 收敛上次退出时遗留的运行中委派子会话（内存态丢失，无法续跑）
   safeRun('markRunningDelegationsAsInterrupted', markRunningDelegationsAsInterrupted)
 
-  // Set dock icon on macOS
   // 确保 Dock 图标可见（dev 模式下通过 spawn 启动时可能不会自动显示）
-  // 如果用户有保存的图标偏好则使用，否则用默认图标
+  // 正式版使用 Bundle 图标；仅开发环境覆盖 Electron 的默认图标。
   if (process.platform === 'darwin' && app.dock) {
     await app.dock.show()
-    const { resolveAppIconPath } = require('./ipc')
-    const settings = getSettings()
-    const variantId = settings.appIconVariant
-    const dockIconPath = resolveAppIconPath(variantId ?? 'default')
-    if (dockIconPath && existsSync(dockIconPath)) {
+    const dockIconPath = join(__dirname, 'resources', 'icon.png')
+    if (!app.isPackaged && existsSync(dockIconPath)) {
       app.dock.setIcon(dockIconPath)
     }
   }
@@ -626,8 +622,8 @@ function handleBootstrapFailure(err: unknown): void {
         `日志位置：${app.getPath('logs')}\n\n` +
         `常见原因与排查：\n` +
         `1. 旧版 Xcode 进程未退出（终端运行 killall Proma 后重试）\n` +
-        `2. ~/.proma/ 配置损坏（重命名 ~/.proma 后重启）\n` +
-        `3. 系统 Keychain 无法解密保存的凭证（删除 ~/.proma/feishu.json 等后重新登录）\n\n` +
+        `2. ~/xcodes/ 配置损坏（重命名 ~/xcodes 后重启）\n` +
+        `3. 系统 Keychain 无法解密保存的凭证（删除 ~/xcodes/feishu.json 等后重新登录）\n\n` +
         `如需协助请到 GitHub Issues 反馈。`,
     )
   } catch {

@@ -1066,7 +1066,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, runtimeThinking, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext, retryOfErrorUuid, browserAnnotations } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, runtimeThinking, registeredAgentSystemPrompt, runtimeToolPolicy, maxTurnsOverride, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, automationContext, retryOfErrorUuid, browserAnnotations } = input
     const stderrChunks: string[] = []
     const streamStartedAt = input.startedAt ?? Date.now()
     /**
@@ -1926,9 +1926,11 @@ export class AgentOrchestrator {
       }
 
       // 13. 构建 Adapter 查询选项
-      const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
-        ? appSettings.agentMaxTurns
-        : undefined
+      const maxTurns = maxTurnsOverride != null && maxTurnsOverride > 0
+        ? Math.floor(maxTurnsOverride)
+        : appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0
+          ? appSettings.agentMaxTurns
+          : undefined
       const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
         sessionMeta,
@@ -2018,9 +2020,15 @@ export class AgentOrchestrator {
           : [],
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
+        ...(runtimeToolPolicy ? { toolPolicy: runtimeToolPolicy } : {}),
         sdkPermissionMode: sdkPermissionModeForPromaMode(initialPermissionMode),
         canUseTool,
-        systemPrompt: systemPromptAppend + buildAdditionalDirectoriesPrompt(allAdditionalDirectories),
+        systemPrompt: [
+          systemPromptAppend + buildAdditionalDirectoriesPrompt(allAdditionalDirectories),
+          registeredAgentSystemPrompt
+            ? `## 注册子 Agent 角色指令\n\n${registeredAgentSystemPrompt}`
+            : '',
+        ].filter(Boolean).join('\n\n'),
         resumeSessionId: existingRuntimeSessionId,
         ...(Object.keys(mcpServers).length > 0 && { mcpServers }),
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
@@ -2122,7 +2130,7 @@ export class AgentOrchestrator {
               modelRoute: taskRoute,
               contextPacket: taskPacket,
               resumeSessionId: undefined,
-              systemPrompt: buildRuntimeTaskSystemPrompt('pi', dispatch.intent),
+              systemPrompt: queryOptions.systemPrompt,
               onSessionId: undefined,
               onModelResolved: (model) => {
                 emit({

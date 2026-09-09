@@ -25,11 +25,33 @@ describe('afterPack 入口（proma CLI 与 Pi Runtime 守卫）', () => {
       afterPack({
         appOutDir,
         electronPlatformName: 'darwin',
+        packager: {
+          appInfo: {
+            productFilename: 'xcodes',
+          },
+        },
       }),
     ).toThrow(/缺少 proma CLI/)
   })
 
   test('Given darwin 目标 When 解析 CLI 路径 Then 使用应用资源目录', () => {
-    expect(resolvePackagedCliPath('/out', 'darwin')).toContain('Xcode-Desktop.app')
+    expect(resolvePackagedCliPath('/out', 'darwin')).toContain('xcodes.app')
+  })
+
+  test('Given context 提供实际 Bundle 名 When afterPack Then 动态使用该名称', () => {
+    const appOutDir = mkdtempSync(join(tmpdir(), 'proma-after-pack-context-'))
+    temporaryDirectories.push(appOutDir)
+
+    expect(() =>
+      afterPack({
+        appOutDir,
+        electronPlatformName: 'darwin',
+        packager: {
+          appInfo: {
+            productFilename: 'context-name',
+          },
+        },
+      }),
+    ).toThrow(/context-name\.app/)
   })
 })
