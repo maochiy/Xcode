@@ -26,6 +26,9 @@ concurrency:
 env:
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
   RELEASE_REPOSITORY: maochiy/Xcode
+  # CI 默认使用硬链接；mac.icon 与 extraResources/icon.icns 同路径时会 EEXIST。
+  # 使用普通复制，与本地打包行为一致，同时避免签名修改影响源文件。
+  USE_HARD_LINKS: 'false'
 
 jobs:
   validate-release:
