@@ -60,3 +60,8 @@ pnpm-workspace.yaml
 
 # Claude worktrees (本地工作目录)
 .claude/
+
+# 本地 Agent 会话状态与临时视觉预览，不属于发布源码。
+.omo/
+apps/electron/src/renderer/__activity_check.html
+apps/electron/src/renderer/__activity_check.tsx
