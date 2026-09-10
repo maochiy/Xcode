@@ -3,7 +3,50 @@ import type { AgentRuntimeModelCatalog, SDKMessage } from '@proma/shared'
 import {
   derivePersistedAgentContextUsage,
   resolveAgentContextPolicy,
+  resolveAgentContextStatus,
 } from './agent-context-usage'
+
+describe('对话压缩配置与当前轮隔离', () => {
+  const catalog: AgentRuntimeModelCatalog = {
+    channelId: 'configured-channel', models: [],
+    contextPolicy: {
+      autoCompactEnabled: true,
+      models: [{
+        model: 'B', contextWindow: 100_000,
+        effectiveContextWindow: 100_000, autoCompactThreshold: 70_000,
+      }],
+    },
+  }
+  const runningA = {
+    isCompacting: false, inputTokens: 12_000, contextWindow: 200_000,
+    autoCompactEnabled: true, autoCompactThreshold: 160_000, effectiveContextWindow: 200_000,
+  }
+
+  test('Given A 活跃而用户选择 B When 计算上下文显示 Then 保留 A 的窗口阈值与用量', () => {
+    expect(resolveAgentContextStatus(runningA, catalog, 'B', true)).toBe(runningA)
+  })
+
+  test('Given A 完成而下一轮选择 B When 计算上下文显示 Then 使用 B 的配置且不篡改历史用量', () => {
+    expect(resolveAgentContextStatus(runningA, catalog, 'B', false)).toEqual({
+      ...runningA, contextWindow: 100_000, effectiveContextWindow: 100_000, autoCompactThreshold: 70_000,
+    })
+    expect(runningA.contextWindow).toBe(200_000)
+  })
+
+  test('Given 新会话无运行统计 When 已配置 B Then 发消息前显示窗口与阈值', () => {
+    expect(resolveAgentContextStatus({ isCompacting: false }, catalog, 'B', false))
+      .toMatchObject({ contextWindow: 100_000, autoCompactEnabled: true, autoCompactThreshold: 70_000 })
+  })
+
+  test('Given A 尚未同步运行策略而用户选择 B When A 活跃 Then 不把 B 配置冒充 A 的执行策略', () => {
+    expect(resolveAgentContextStatus({ isCompacting: false }, catalog, 'B', true))
+      .toEqual({ isCompacting: false })
+  })
+
+  test('Given 模型目录加载失败 When 计算上下文显示 Then 保留运行层已知策略', () => {
+    expect(resolveAgentContextStatus(runningA, undefined, 'A', false)).toBe(runningA)
+  })
+})
 
 describe('历史会话上下文圆环水合', () => {
   test('Given CCB 轻量策略目录 When 打开历史会话 Then 无需启动 Turn 即可读取可用窗口', () => {

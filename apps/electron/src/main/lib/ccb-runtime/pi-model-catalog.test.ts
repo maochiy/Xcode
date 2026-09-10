@@ -5,6 +5,7 @@ import {
   type ThinkingEffortLevel,
 } from '@proma/shared'
 import { buildChannelModelCatalog } from './pi-model-catalog'
+import { buildPromaRuntimeModelRoute } from '../runtime/proma-runtime-model-route'
 
 function createChannel(
   models: Channel['models'],
@@ -104,5 +105,50 @@ describe('Pi 模型目录思考等级', () => {
       .toEqual(['enabled-model', 'disabled-model'])
     expect(catalog.models[1]?.supportedEffortLevels)
       .toEqual([...DEFAULT_THINKING_EFFORT_LEVELS])
+  })
+})
+
+describe('Pi 配置、目录与执行使用同一压缩策略', () => {
+  test('Given 供应商默认 80% 与模型覆盖 70% When 读取模型目录 Then 分别显示 160K 和 70K 且与执行路由一致', () => {
+    const channel = {
+      ...createChannel([
+        { id: 'A', name: 'A', enabled: true, contextWindow: 200_000 },
+        { id: 'B', name: 'B', enabled: true, contextWindow: 100_000, autoCompactRatio: 70 },
+      ]),
+      autoCompactRatio: 80,
+    }
+    const catalog = buildChannelModelCatalog(channel)
+    expect(catalog.contextPolicy.autoCompactEnabled).toBe(true)
+    expect(catalog.contextPolicy.models.map(policy => policy.autoCompactThreshold))
+      .toEqual([160_000, 70_000])
+    for (const policy of catalog.contextPolicy.models) {
+      const route = buildPromaRuntimeModelRoute({ channel, modelId: policy.model })
+      expect(route.compaction).toEqual({
+        enabled: true,
+        contextWindow: policy.contextWindow,
+        threshold: policy.autoCompactThreshold,
+      })
+      expect(catalog.models.find(model => model.value === policy.model)?.contextWindow)
+        .toBe(policy.effectiveContextWindow)
+    }
+  })
+
+  test('Given 模型未填窗口与压缩比例 When 读取目录 Then 使用与运行层相同的 200K 和 80% 而非模型名推测值', () => {
+    const channel = createChannel([{ id: 'deepseek-v4-flash', name: '默认窗口模型', enabled: true }])
+    const catalog = buildChannelModelCatalog(channel)
+    expect(catalog.models[0]?.contextWindow).toBe(200_000)
+    expect(catalog.contextPolicy.models[0]).toEqual({
+      model: 'deepseek-v4-flash', contextWindow: 200_000,
+      effectiveContextWindow: 200_000, autoCompactThreshold: 160_000,
+    })
+  })
+
+  test('Given 仅供应商比例改变 When 重新读取目录 Then 模型元数据不变但继承阈值随配置变化', () => {
+    const channel = createChannel([{ id: 'A', name: 'A', enabled: true, contextWindow: 200_000 }])
+    const before = buildChannelModelCatalog(channel)
+    const after = buildChannelModelCatalog({ ...channel, autoCompactRatio: 60 })
+    expect(after.models).toEqual(before.models)
+    expect(after.contextPolicy.models[0]?.autoCompactThreshold).toBe(120_000)
+    expect(after.contextPolicy).not.toEqual(before.contextPolicy)
   })
 })

@@ -1,16 +1,58 @@
 import assert from 'node:assert/strict';
+import { fork as forkChildProcess, spawnSync } from 'node:child_process';
 import { readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { createPiBridge } from './pi-bridge.mjs';
+import { createPiBridge, createPiBridgePool } from './pi-bridge.mjs';
 
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(runtimeDir, '../../../..');
 const workerPath = path.join(runtimeDir, 'workers', 'pi-worker.mjs');
 const workerRequirePath = path.resolve(runtimeDir, '../pi-worker-compat.cjs');
+const channelFixturePath = path.join(
+  repositoryRoot,
+  'apps/electron/scripts/pi-compaction-channel-fixture.mjs',
+);
+const channelFixtureOutputPrefix = 'PROMA_COMPACTION_FIXTURE_JSON=';
+const isolatedWorkerEnvAllowlist = new Set([
+  'HOME',
+  'USERPROFILE',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'PATH',
+  'LANG',
+  'LC_ALL',
+  'SystemRoot',
+  'WINDIR',
+  'ComSpec',
+  'PATHEXT',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'GEMINI_API_KEY',
+  'PROMA_PI_WORKER_REQUIRE_PATH',
+  'PROMA_PI_RUNTIME_ROOT',
+  'PROMA_PI_RUNTIME_VERSION',
+  'PROMA_PI_RUNTIME_BUILD_ID',
+  'PROMA_PI_HOST_PROTOCOL_VERSION',
+  'FRAKIO_PI_RUNTIME_ROOT',
+  'FRAKIO_PI_RUNTIME_VERSION',
+  'FRAKIO_PI_RUNTIME_BUILD_ID',
+  'FRAKIO_PI_HOST_PROTOCOL_VERSION',
+]);
 
 function deferred() {
   let resolve;
@@ -136,6 +178,19 @@ function writeReadToolResponse(response, requestIndex, filePath, usage) {
   finishStream(response, requestIndex, 'tool_calls', usage);
 }
 
+async function writeStreamingReadToolResponse(
+  response,
+  requestIndex,
+  filePath,
+  firstChunkSent,
+  streamGate,
+) {
+  writeChunk(response, requestIndex, { content: 'A 流式输出未结束' });
+  firstChunkSent.resolve();
+  await streamGate.promise;
+  writeReadToolResponse(response, requestIndex, filePath);
+}
+
 async function startOpenAiServer(responsePlans) {
   const requests = [];
   const failures = [];
@@ -246,6 +301,102 @@ function isolatedWorkerEnv(root) {
   };
 }
 
+function isolatedChannelFixtureEnv(root) {
+  const home = path.join(root, 'home');
+  const temporary = path.join(root, 'tmp');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(temporary, { recursive: true });
+  return {
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+    XDG_CACHE_HOME: path.join(home, '.cache'),
+    XDG_DATA_HOME: path.join(home, '.local', 'share'),
+    APPDATA: path.join(home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(home, 'AppData', 'Local'),
+    TMPDIR: temporary,
+    TMP: temporary,
+    TEMP: temporary,
+    PATH: process.env.PATH || '',
+    LANG: process.env.LANG || 'en_US.UTF-8',
+    LC_ALL: process.env.LC_ALL || '',
+    HTTP_PROXY: '',
+    HTTPS_PROXY: '',
+    ALL_PROXY: '',
+    NO_PROXY: '127.0.0.1,localhost',
+    OPENAI_API_KEY: '',
+    ANTHROPIC_API_KEY: '',
+    GOOGLE_API_KEY: '',
+    GEMINI_API_KEY: '',
+    PROMA_COMPACTION_FIXTURE_HOME: home,
+  };
+}
+
+function runChannelFixture(root, action, input) {
+  const result = spawnSync('bun', ['--no-env-file', channelFixturePath, action], {
+    cwd: root,
+    env: isolatedChannelFixtureEnv(root),
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.equal(
+    result.status,
+    0,
+    `隔离渠道夹具失败：${result.stderr || result.stdout}`,
+  );
+  const output = result.stdout
+    .split(/\r?\n/)
+    .find((line) => line.startsWith(channelFixtureOutputPrefix));
+  assert.ok(output, `隔离渠道夹具未返回结果：${result.stdout}`);
+  return JSON.parse(output.slice(channelFixtureOutputPrefix.length));
+}
+
+function assertCatalogMatchesRoute(snapshot) {
+  const { catalog, route } = snapshot;
+  const policy = catalog.contextPolicy.models.find((item) => item.model === route.modelId);
+  const catalogModel = catalog.models.find((item) => item.value === route.modelId);
+  assert.equal(catalog.contextPolicy.autoCompactEnabled, true);
+  assert.ok(policy, `目录缺少模型压缩策略：${route.modelId}`);
+  assert.ok(catalogModel, `目录缺少模型：${route.modelId}`);
+  assert.deepEqual(
+    {
+      enabled: catalog.contextPolicy.autoCompactEnabled,
+      threshold: policy.autoCompactThreshold,
+      contextWindow: policy.effectiveContextWindow,
+    },
+    route.compaction,
+    '模型目录显示策略必须与实际 Runtime 路由一致',
+  );
+  assert.equal(policy.contextWindow, route.compaction.contextWindow);
+  assert.equal(catalogModel.contextWindow, route.compaction.contextWindow);
+}
+
+function applyChannelSnapshot(payload, snapshot) {
+  const configuredModel = snapshot.channel.models.find(
+    (model) => model.id === snapshot.route.modelId,
+  );
+  return {
+    ...payload,
+    routeRevision: snapshot.route.routeRevision,
+    credentialRevision: snapshot.route.credentialRevision,
+    apiMode: snapshot.route.apiMode,
+    modelId: snapshot.route.modelId,
+    model: {
+      ...payload.model,
+      providerId: snapshot.channel.id,
+      providerName: snapshot.channel.name,
+      modelId: snapshot.route.modelId,
+      modelName: configuredModel?.name || snapshot.route.modelId,
+      apiMode: snapshot.route.apiMode,
+      baseUrl: snapshot.route.baseUrl,
+      apiKey: 'local-test-key',
+      contextWindow: snapshot.route.compaction.contextWindow,
+      compaction: snapshot.route.compaction,
+    },
+  };
+}
+
 function runPayload({
   baseUrl,
   cwd,
@@ -256,6 +407,7 @@ function runPayload({
   runId,
   sessionId,
   prompt,
+  modelId = 'proma-pi-integration',
 }) {
   return {
     runId,
@@ -263,7 +415,7 @@ function runPayload({
     routeRevision: 'integration-route-1',
     credentialRevision: 'integration-credential-1',
     apiMode: 'openai_chat_completions',
-    modelId: 'proma-pi-integration',
+    modelId,
     runtimeBinding: {
       runtimeId: 'pi',
       runtimeVersion: '0.80.9',
@@ -297,8 +449,8 @@ function runPayload({
     model: {
       providerId: 'local-openai',
       providerName: 'Local OpenAI Test',
-      modelId: 'proma-pi-integration',
-      modelName: 'Proma Pi Integration',
+      modelId,
+      modelName: modelId,
       apiMode: 'openai_chat_completions',
       baseUrl,
       apiKey: 'local-test-key',
@@ -309,6 +461,61 @@ function runPayload({
       compaction: { enabled: false },
     },
   };
+}
+
+function createModelSelectionFixture(initialModelId) {
+  let selectedModelId = initialModelId;
+  return {
+    get selectedModelId() {
+      return selectedModelId;
+    },
+    select(modelId) {
+      selectedModelId = modelId;
+    },
+  };
+}
+
+function createIsolatedPiPool({ root, runtimeBinding, toolHandler }) {
+  const workerReadyEvents = [];
+  const workerEnvironments = [];
+  const pool = createPiBridgePool({
+    bindingResolver: () => runtimeBinding,
+    env: isolatedWorkerEnv(root),
+    toolHandler,
+    bridgeFactory(options) {
+      const bridge = createPiBridge({
+        ...options,
+        workerPath,
+        forkProcess(modulePath, args, forkOptions) {
+          const env = Object.fromEntries(
+            Object.entries(forkOptions.env || {})
+              .filter(([key]) => isolatedWorkerEnvAllowlist.has(key)),
+          );
+          workerEnvironments.push(env);
+          return forkChildProcess(modulePath, args, { ...forkOptions, env });
+        },
+      });
+      bridge.on('ready', (event) => workerReadyEvents.push(event));
+      return bridge;
+    },
+  });
+  return { pool, workerEnvironments, workerReadyEvents };
+}
+
+function assertIsolatedWorkerEnvironment(environment, root) {
+  assert.ok(environment);
+  assert.ok(Object.keys(environment).every((key) => isolatedWorkerEnvAllowlist.has(key)));
+  assert.equal(path.resolve(environment.HOME), path.resolve(root, 'home'));
+  assert.equal(path.resolve(environment.TMPDIR), path.resolve(root, 'tmp'));
+  assert.equal(environment.NO_PROXY, '127.0.0.1,localhost');
+  assert.equal(environment.HTTP_PROXY, '');
+  assert.equal(environment.HTTPS_PROXY, '');
+  assert.equal(environment.ALL_PROXY, '');
+  assert.equal(environment.OPENAI_API_KEY, '');
+  assert.equal(environment.ANTHROPIC_API_KEY, '');
+  assert.equal(environment.GOOGLE_API_KEY, '');
+  assert.equal(environment.GEMINI_API_KEY, '');
+  assert.equal('SSH_AUTH_SOCK' in environment, false);
 }
 
 test('Given 同一原生会话连续两轮更新宿主规则 When 第二轮运行 Then 从 sessionFile 恢复历史并使用最新系统提示词', {
@@ -531,7 +738,7 @@ test('Given Pi 手动压缩正在等待模型 When 停止后重试 Then 保留�
   }
 });
 
-test('Given 小窗口同轮工具结果超过阈值 When 模型尚未继续 Then 自动压缩并保留工具结果继续执行', {
+test('Given 真实渠道供应商比例的小窗口同轮工具结果超过阈值 When 模型尚未继续 Then 自动压缩并保留工具结果继续执行', {
   timeout: 30_000,
 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-small-window-'));
@@ -553,13 +760,43 @@ test('Given 小窗口同轮工具结果超过阈值 When 模型尚未继续 Then
     },
     async (response, index) => writeTextResponse(response, index, '小窗口压缩后继续完成'),
   ]);
-  const payload = runPayload({
+  const created = runChannelFixture(root, 'create', {
+    channel: {
+      name: '小窗口隔离渠道',
+      provider: 'custom',
+      baseUrl: server.baseUrl,
+      apiKey: 'local-test-key',
+      models: [{
+        id: 'small-window-model',
+        name: 'Small Window Model',
+        enabled: true,
+        contextWindow: 8_000,
+      }],
+      autoCompactRatio: 37.5,
+      defaultModelId: 'small-window-model',
+      enabled: true,
+    },
+    modelId: 'small-window-model',
+  });
+  const channelSnapshot = runChannelFixture(root, 'inspect', {
+    channelId: created.channel.id,
+    modelId: 'small-window-model',
+  });
+  assertCatalogMatchesRoute(channelSnapshot);
+  assert.equal(
+    channelSnapshot.route.compaction.threshold,
+    Math.round(
+      channelSnapshot.route.compaction.contextWindow
+      * channelSnapshot.channel.autoCompactRatio / 100,
+    ),
+    '模型未覆盖比例时必须继承供应商级配置',
+  );
+  const payload = applyChannelSnapshot(runPayload({
     baseUrl: server.baseUrl, cwd, agentDir: path.join(root, 'agent'),
     sessionRoot: path.join(root, 'sessions'), runId: 'small-window-run',
     sessionId: 'small-window-session', prompt: '读取隔离文件并回答。历史背景。'.repeat(300),
-  });
-  payload.model.contextWindow = 8_000;
-  payload.model.compaction = { enabled: true, threshold: 3_000 };
+    modelId: 'small-window-model',
+  }), channelSnapshot);
   const bridge = createPiBridge({
     workerPath, env: isolatedWorkerEnv(root), runtimeBinding: payload.runtimeBinding,
     toolHandler: async (name) => {
@@ -605,7 +842,7 @@ test('Given 小窗口同轮工具结果超过阈值 When 模型尚未继续 Then
   }
 });
 
-test('Given 隔离历史超过原生自动压缩阈值 When 压缩响应延迟 Then 运行等待压缩完成并继续输出有效 usage', {
+test('Given 供应商比例渠道已积累隔离历史 When 保存模型级窗口与比例并在同 Session 下一轮运行 Then 按新阈值压缩后继续回答', {
   timeout: 45_000,
 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-auto-compact-'));
@@ -644,7 +881,43 @@ test('Given 隔离历史超过原生自动压缩阈值 When 压缩响应延迟 T
   ]);
   const sessionId = 'native-auto-compaction-integration';
   const runId = 'native-auto-compaction-run';
-  const basePayload = runPayload({
+  const created = runChannelFixture(root, 'create', {
+    channel: {
+      name: '自动压缩隔离渠道',
+      provider: 'custom',
+      baseUrl: server.baseUrl,
+      apiKey: 'local-test-key',
+      models: [{
+        id: 'native-auto-compaction-model',
+        name: 'Native Auto Compaction Model',
+        enabled: true,
+        contextWindow: 200_000,
+      }],
+      autoCompactRatio: 90,
+      defaultModelId: 'native-auto-compaction-model',
+      enabled: true,
+    },
+    modelId: 'native-auto-compaction-model',
+  });
+  const inheritedSnapshot = runChannelFixture(root, 'inspect', {
+    channelId: created.channel.id,
+    modelId: 'native-auto-compaction-model',
+  });
+  assertCatalogMatchesRoute(inheritedSnapshot);
+  assert.equal(
+    inheritedSnapshot.route.compaction.threshold,
+    Math.round(
+      inheritedSnapshot.route.compaction.contextWindow
+      * inheritedSnapshot.channel.autoCompactRatio / 100,
+    ),
+    '初始模型必须继承供应商级压缩比例',
+  );
+  assert.equal(
+    'autoCompactRatio' in inheritedSnapshot.channel.models[0],
+    false,
+    '供应商级继承场景不得暗含模型覆盖',
+  );
+  const basePayload = applyChannelSnapshot(runPayload({
     baseUrl: server.baseUrl,
     cwd,
     agentDir: path.join(root, 'agent'),
@@ -652,52 +925,88 @@ test('Given 隔离历史超过原生自动压缩阈值 When 压缩响应延迟 T
     runId: 'native-auto-compaction-history-1',
     sessionId,
     prompt: `${fixtureBody}\n第一段隔离历史`,
-  });
+    modelId: 'native-auto-compaction-model',
+  }), inheritedSnapshot);
 
-  let bridge;
+  const { pool, workerEnvironments, workerReadyEvents } = createIsolatedPiPool({
+    root,
+    runtimeBinding: basePayload.runtimeBinding,
+    toolHandler: async (name) => {
+      throw new Error(`自动压缩集成测试禁止执行工具：${name}`);
+    },
+  });
   try {
-    bridge = createPiBridge({
-      workerPath,
-      env: isolatedWorkerEnv(root),
-      runtimeBinding: basePayload.runtimeBinding,
-      toolHandler: async (name) => {
-        throw new Error(`自动压缩集成测试禁止执行工具：${name}`);
-      },
-    });
-    const recorder = createEventRecorder(bridge);
-    const accepted = await bridge.startRun(basePayload);
+    const recorder = createEventRecorder(pool);
+    const accepted = await pool.startRun(basePayload);
     await recorder.terminal(basePayload.runId);
-    await bridge.startRun({
+    await pool.startRun({
       ...basePayload,
       runId: 'native-auto-compaction-history-2',
       sessionFile: accepted.sessionFile,
       prompt: `${fixtureBody}\n第二段隔离历史`,
     });
     await recorder.terminal('native-auto-compaction-history-2');
-    await bridge.startRun({
+    await pool.startRun({
       ...basePayload,
       runId: 'native-auto-compaction-history-3',
       sessionFile: accepted.sessionFile,
       prompt: '近期隔离历史',
     });
     await recorder.terminal('native-auto-compaction-history-3');
+    assert.equal(
+      recorder.events.some((message) =>
+        message.event?.type === 'context.compaction.started'),
+      false,
+      '供应商级高阈值下的历史准备阶段不得提前压缩',
+    );
 
-    const payload = {
+    const updated = runChannelFixture(root, 'update', {
+      channelId: created.channel.id,
+      modelId: 'native-auto-compaction-model',
+      patch: {
+        models: [{
+          id: 'native-auto-compaction-model',
+          name: 'Native Auto Compaction Model',
+          enabled: true,
+          contextWindow: 2_048,
+          autoCompactRatio: 12.5,
+        }],
+      },
+    });
+    const overriddenSnapshot = runChannelFixture(root, 'inspect', {
+      channelId: created.channel.id,
+      modelId: 'native-auto-compaction-model',
+    });
+    assert.deepEqual(overriddenSnapshot, updated, '更新结果必须能由全新 Bun 进程完整重载');
+    assertCatalogMatchesRoute(overriddenSnapshot);
+    assert.equal(overriddenSnapshot.channel.autoCompactRatio, 90);
+    assert.equal(overriddenSnapshot.channel.models[0].autoCompactRatio, 12.5);
+    assert.equal(
+      overriddenSnapshot.route.compaction.threshold,
+      Math.round(
+        overriddenSnapshot.route.compaction.contextWindow
+        * overriddenSnapshot.channel.models[0].autoCompactRatio / 100,
+      ),
+      '模型级压缩比例必须覆盖供应商级配置',
+    );
+    assert.notEqual(
+      overriddenSnapshot.route.routeRevision,
+      inheritedSnapshot.route.routeRevision,
+      '保存后的 updatedAt 必须刷新 Runtime routeRevision',
+    );
+
+    const payload = applyChannelSnapshot({
       ...basePayload,
-      routeRevision: 'integration-route-auto-compaction',
       runId,
       sessionFile: accepted.sessionFile,
       prompt: '压缩后继续当前隔离问题。',
-      model: {
-        ...basePayload.model,
-        contextWindow: 2_048,
-        compaction: {
-          enabled: true,
-          threshold: 256,
-        },
-      },
-    };
-    await bridge.startRun(payload);
+    }, overriddenSnapshot);
+    const updatedAccepted = await pool.startRun(payload);
+    assert.equal(
+      path.resolve(updatedAccepted.sessionFile),
+      path.resolve(accepted.sessionFile),
+      '保存新策略后的下一轮必须继续复用同一原生 session 文件',
+    );
 
     await summaryStarted.promise;
     const compactionStarted = await waitFor(
@@ -763,9 +1072,335 @@ test('Given 隔离历史超过原生自动压缩阈值 When 压缩响应延迟 T
       JSON.stringify(server.requests[4].body).includes('隔离压缩摘要'),
       '压缩后的后续模型请求必须使用原生摘要继续执行',
     );
+    assert.equal(workerReadyEvents.length, 1, '配置更新前后必须复用同一个真实 Pi Worker');
+    assert.equal(workerEnvironments.length, 1);
+    assertIsolatedWorkerEnvironment(workerEnvironments[0], root);
+    assert.equal(pool.bridgeCount(), 1);
+    assert.equal(pool.sessionCount(), 1);
   } finally {
     summaryResponseGate.resolve();
-    await bridge?.close().catch(() => {});
+    await pool.close().catch(() => {});
+    await server.close().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Given A 正在流式并继续执行工具 When 宿主选择 fixture 改为 B Then 当前运行不中断且下一次 startRun 才使用 B', {
+  timeout: 45_000,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-next-run-model-'));
+  const cwd = path.join(root, 'workspace');
+  const agentDir = path.join(root, 'agent');
+  const sessionRoot = path.join(root, 'sessions');
+  const fixturePath = path.join(cwd, 'model-switch-fixture.txt');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(fixturePath, 'MODEL_SWITCH_TOOL_RESULT\n', 'utf8');
+
+  const firstChunkSent = deferred();
+  const streamGate = deferred();
+  const permissionStarted = deferred();
+  const permissionGate = deferred();
+  const server = await startOpenAiServer([
+    async (response, index) => writeStreamingReadToolResponse(
+      response,
+      index,
+      fixturePath,
+      firstChunkSent,
+      streamGate,
+    ),
+    async (response, index) => writeTextResponse(response, index, 'A 工具后完成'),
+    async (response, index) => writeTextResponse(response, index, 'B 下一轮完成'),
+  ]);
+  const sessionId = 'next-run-model-session';
+  const selection = createModelSelectionFixture('pi-model-a');
+  const basePayload = runPayload({
+    baseUrl: server.baseUrl,
+    cwd,
+    agentDir,
+    sessionRoot,
+    runId: 'unused',
+    sessionId,
+    prompt: '',
+    modelId: selection.selectedModelId,
+  });
+  const { pool, workerEnvironments, workerReadyEvents } = createIsolatedPiPool({
+    root,
+    runtimeBinding: basePayload.runtimeBinding,
+    toolHandler: async (name, params, context) => {
+      assert.equal(name, 'proma_permission_check');
+      assert.equal(params.toolName, 'read');
+      assert.equal(path.resolve(String(params.input?.path || '')), fixturePath);
+      assert.equal(context.sessionId, sessionId);
+      permissionStarted.resolve();
+      await permissionGate.promise;
+      return { behavior: 'allow', updatedInput: { path: fixturePath } };
+    },
+  });
+  try {
+    const recorder = createEventRecorder(pool);
+    const firstRunId = 'next-run-model-a';
+    const accepted = await pool.startRun({
+      ...basePayload,
+      runId: firstRunId,
+      prompt: '用 A 读取隔离文件',
+    });
+    await firstChunkSent.promise;
+    await waitFor(
+      () => recorder.transcript(firstRunId).find((message) =>
+        message.type === 'assistant'
+        && message._partial === true
+        && projectedText(message).includes('A 流式输出未结束')),
+      'A 的真实 SSE partial',
+    );
+
+    // 这里仅表示宿主已经持久化下一轮模型选择；该 integration 层不包含 UI。
+    selection.select('pi-model-b');
+    assert.equal(selection.selectedModelId, 'pi-model-b');
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0].body.model, 'pi-model-a');
+    assert.equal(
+      recorder.events.some((message) =>
+        message.runId === firstRunId
+        && ['run.completed', 'run.failed', 'run.cancelled'].includes(message.event?.type)),
+      false,
+      '切换下一轮选择不得结束 A 的流式请求',
+    );
+
+    streamGate.resolve();
+    await permissionStarted.promise;
+    assert.equal(server.requests.length, 1, 'A 的工具尚未完成时不得提前开始 B');
+    assert.equal(
+      recorder.events.some((message) =>
+        message.runId === firstRunId
+        && ['run.completed', 'run.failed', 'run.cancelled'].includes(message.event?.type)),
+      false,
+      '切换选择不得中断 A 的工具执行',
+    );
+    permissionGate.resolve();
+    const firstTerminal = await recorder.terminal(firstRunId);
+    assert.equal(firstTerminal.event.payload.output, 'A 流式输出未结束A 工具后完成');
+
+    const firstFinalTranscript = recorder.transcript(firstRunId)
+      .filter((message) => message._partial !== true);
+    assert.deepEqual(
+      firstFinalTranscript.map((message) => {
+        const tool = message.message?.content?.find((block) => block.type === 'tool_use');
+        const toolResult = message.message?.content?.find((block) => block.type === 'tool_result');
+        if (tool) return `assistant:tool:${tool.name}`;
+        if (toolResult) return `user:tool_result:${toolResult.tool_use_id}`;
+        return `${message.type}:${projectedText(message)}`;
+      }),
+      [
+        'assistant:tool:read',
+        'user:tool_result:call-read-fixture',
+        'assistant:A 工具后完成',
+      ],
+    );
+
+    const secondRunId = 'next-run-model-b';
+    const secondAccepted = await pool.startRun(runPayload({
+      baseUrl: server.baseUrl,
+      cwd,
+      agentDir,
+      sessionRoot,
+      sessionFile: accepted.sessionFile,
+      runId: secondRunId,
+      sessionId,
+      prompt: '完成后的下一轮使用 B',
+      modelId: selection.selectedModelId,
+    }));
+    await recorder.terminal(secondRunId);
+
+    assert.equal(path.resolve(secondAccepted.sessionFile), path.resolve(accepted.sessionFile));
+    assert.deepEqual(server.requests.map((request) => request.body.model), [
+      'pi-model-a',
+      'pi-model-a',
+      'pi-model-b',
+    ]);
+    assert.ok(
+      server.requests[1].body.messages.some((message) =>
+        message.role === 'tool'
+        && message.tool_call_id === 'call-read-fixture'
+        && String(message.content).includes('MODEL_SWITCH_TOOL_RESULT')),
+      'A 的工具结果必须由 A 的续接请求消费',
+    );
+    assert.ok(
+      JSON.stringify(server.requests[2].body.messages).includes('A 工具后完成'),
+      '模型切换后必须从同一个原生 session 文件恢复 A 的历史',
+    );
+    assert.ok(server.requests.every((request) => request.url === '/v1/chat/completions'));
+    assert.ok(server.requests.every((request) => request.authorization === 'Bearer local-test-key'));
+    assert.ok(server.requests.every((request) => request.remoteAddress === '127.0.0.1'));
+    assert.deepEqual(server.failures, []);
+    assert.equal(workerReadyEvents.length, 1, 'A/B 两轮必须复用同一个真实 Pi Worker');
+    assert.equal(workerReadyEvents[0].version, '0.80.9');
+    assert.equal(workerEnvironments.length, 1);
+    assertIsolatedWorkerEnvironment(workerEnvironments[0], root);
+    assert.equal(pool.bridgeCount(), 1);
+    assert.equal(pool.sessionCount(), 1);
+    await pool.disposeSession(sessionId);
+    assert.equal(pool.sessionCount(), 0, '显式释放后不再保留原生 Session');
+    assert.equal(pool.bridgeCount(), 1, '释放 Session 不应同步杀死仍处于空闲期的 Worker');
+  } finally {
+    streamGate.resolve();
+    permissionGate.resolve();
+    await pool.close().catch(() => {});
+    await server.close().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Given A 的工具正在执行且下一轮已选 B When 走现有 steering immediate-send Then 当前工具与续接仍使用 A 且完成后新运行使用 B', {
+  timeout: 45_000,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'proma-pi-steer-next-model-'));
+  const cwd = path.join(root, 'workspace');
+  const agentDir = path.join(root, 'agent');
+  const sessionRoot = path.join(root, 'sessions');
+  const fixturePath = path.join(cwd, 'steer-model-fixture.txt');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(fixturePath, 'STEER_MODEL_TOOL_RESULT\n', 'utf8');
+
+  const permissionStarted = deferred();
+  const permissionGate = deferred();
+  const server = await startOpenAiServer([
+    async (response, index) => writeReadToolResponse(response, index, fixturePath),
+    async (response, index) => writeTextResponse(response, index, 'A 立即发送续接完成'),
+    async (response, index) => writeTextResponse(response, index, 'B 新运行完成'),
+  ]);
+  const sessionId = 'steer-next-model-session';
+  const selection = createModelSelectionFixture('pi-model-a');
+  const basePayload = runPayload({
+    baseUrl: server.baseUrl,
+    cwd,
+    agentDir,
+    sessionRoot,
+    runId: 'unused',
+    sessionId,
+    prompt: '',
+    modelId: selection.selectedModelId,
+  });
+  const { pool, workerEnvironments, workerReadyEvents } = createIsolatedPiPool({
+    root,
+    runtimeBinding: basePayload.runtimeBinding,
+    toolHandler: async (name, params, context) => {
+      assert.equal(name, 'proma_permission_check');
+      assert.equal(params.toolName, 'read');
+      assert.equal(path.resolve(String(params.input?.path || '')), fixturePath);
+      assert.equal(context.sessionId, sessionId);
+      permissionStarted.resolve();
+      await permissionGate.promise;
+      return { behavior: 'allow', updatedInput: { path: fixturePath } };
+    },
+  });
+  try {
+    const recorder = createEventRecorder(pool);
+    const firstRunId = 'steer-next-model-a';
+    const accepted = await pool.startRun({
+      ...basePayload,
+      runId: firstRunId,
+      prompt: '先读取隔离文件',
+    });
+    await permissionStarted.promise;
+
+    // 模型选择由宿主 fixture 保存；立即发送仍调用现有 run.steer，不向活跃 run 热切模型。
+    selection.select('pi-model-b');
+    await pool.steer(sessionId, '读取完成后只回答新问题', {
+      uuid: 'steer-after-model-selection',
+      rawText: '读取完成后只回答新问题',
+      interrupt: true,
+    });
+    assert.equal(selection.selectedModelId, 'pi-model-b');
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0].body.model, 'pi-model-a');
+    assert.equal(
+      recorder.events.some((message) =>
+        message.runId === firstRunId
+        && ['run.completed', 'run.failed', 'run.cancelled'].includes(message.event?.type)),
+      false,
+      '立即发送不得中断正在执行的工具',
+    );
+
+    permissionGate.resolve();
+    const firstTerminal = await recorder.terminal(firstRunId);
+    assert.equal(firstTerminal.event.payload.output, 'A 立即发送续接完成');
+
+    const firstFinalTranscript = recorder.transcript(firstRunId)
+      .filter((message) => message._partial !== true);
+    const transcriptOrder = firstFinalTranscript.map((message) => {
+      const tool = message.message?.content?.find((block) => block.type === 'tool_use');
+      const toolResult = message.message?.content?.find((block) => block.type === 'tool_result');
+      if (tool) return `assistant:tool:${tool.name}`;
+      if (toolResult) return `user:tool_result:${toolResult.tool_use_id}`;
+      return `${message.type}:${projectedText(message)}`;
+    });
+    assert.deepEqual(transcriptOrder, [
+      'assistant:tool:read',
+      'user:tool_result:call-read-fixture',
+      'user:读取完成后只回答新问题',
+      'assistant:A 立即发送续接完成',
+    ]);
+
+    const continuedRequest = server.requests[1].body;
+    assert.equal(continuedRequest.model, 'pi-model-a', '当前 run 的 steering 续接必须保持 A');
+    const toolResultIndex = continuedRequest.messages.findIndex((message) =>
+      message.role === 'tool'
+      && message.tool_call_id === 'call-read-fixture'
+      && String(message.content).includes('STEER_MODEL_TOOL_RESULT'));
+    const steeringIndex = continuedRequest.messages.findIndex((message) =>
+      message.role === 'user'
+      && openAiText(message).endsWith('\n\n读取完成后只回答新问题'));
+    assert.ok(toolResultIndex >= 0);
+    assert.ok(steeringIndex > toolResultIndex, '工具结果必须先于 immediate-send 指令进入下一次模型请求');
+    assert.ok(
+      openAiText(continuedRequest.messages[steeringIndex])
+        .includes('答完即结束，不自行恢复、补完或汇报旧任务'),
+      '必须复用现有 steering 当前任务更新语义',
+    );
+
+    const secondRunId = 'steer-next-model-b';
+    const secondAccepted = await pool.startRun(runPayload({
+      baseUrl: server.baseUrl,
+      cwd,
+      agentDir,
+      sessionRoot,
+      sessionFile: accepted.sessionFile,
+      runId: secondRunId,
+      sessionId,
+      prompt: '下一轮开始',
+      modelId: selection.selectedModelId,
+    }));
+    await recorder.terminal(secondRunId);
+
+    assert.equal(path.resolve(secondAccepted.sessionFile), path.resolve(accepted.sessionFile));
+    assert.deepEqual(server.requests.map((request) => request.body.model), [
+      'pi-model-a',
+      'pi-model-a',
+      'pi-model-b',
+    ]);
+    assert.ok(
+      server.requests[2].body.messages.some((message) =>
+        message.role === 'user' && openAiText(message) === '下一轮开始'),
+    );
+    assert.ok(
+      JSON.stringify(server.requests[2].body.messages).includes('A 立即发送续接完成'),
+      'B 新运行必须恢复完成后的 A session 历史',
+    );
+    assert.ok(server.requests.every((request) => request.url === '/v1/chat/completions'));
+    assert.ok(server.requests.every((request) => request.authorization === 'Bearer local-test-key'));
+    assert.ok(server.requests.every((request) => request.remoteAddress === '127.0.0.1'));
+    assert.deepEqual(server.failures, []);
+    assert.equal(workerReadyEvents.length, 1, 'steering 与后续 B 运行必须复用同一个真实 Pi Worker');
+    assert.equal(workerEnvironments.length, 1);
+    assertIsolatedWorkerEnvironment(workerEnvironments[0], root);
+    assert.equal(pool.bridgeCount(), 1);
+    assert.equal(pool.sessionCount(), 1);
+    await pool.disposeSession(sessionId);
+    assert.equal(pool.sessionCount(), 0);
+    assert.equal(pool.bridgeCount(), 1);
+  } finally {
+    permissionGate.resolve();
+    await pool.close().catch(() => {});
     await server.close().catch(() => {});
     rmSync(root, { recursive: true, force: true });
   }

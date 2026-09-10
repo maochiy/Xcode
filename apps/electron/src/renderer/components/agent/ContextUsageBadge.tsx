@@ -342,6 +342,7 @@ export function ContextUsageBadge({
       <PopoverTrigger asChild>
         <Button
           type="button"
+          aria-label="上下文使用量与压缩设置"
           variant="ghost"
           size="icon"
           className={cn(

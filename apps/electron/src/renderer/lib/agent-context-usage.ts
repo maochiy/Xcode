@@ -3,6 +3,7 @@ import type {
   AgentRuntimeModelCatalog,
   SDKMessage,
 } from '@proma/shared'
+import type { AgentContextStatus } from '../atoms/agent-atoms'
 
 export interface RestoredAgentContextUsage {
   inputTokens: number
@@ -42,6 +43,25 @@ export function resolveAgentContextPolicy(
     policy =>
       policy.model === modelId || policy.model === normalizedModelId,
   )
+}
+
+/** 活跃轮只显示该轮的执行快照；空闲时展示下一轮选定模型的配置。 */
+export function resolveAgentContextStatus(
+  status: AgentContextStatus,
+  catalog: AgentRuntimeModelCatalog | undefined,
+  modelId: string | null | undefined,
+  active: boolean,
+): AgentContextStatus {
+  if (active) return status
+  const policy = resolveAgentContextPolicy(catalog, modelId)
+  if (!policy) return status
+  return {
+    ...status,
+    contextWindow: policy.contextWindow,
+    autoCompactEnabled: catalog!.contextPolicy.autoCompactEnabled,
+    autoCompactThreshold: policy.autoCompactThreshold,
+    effectiveContextWindow: policy.effectiveContextWindow,
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

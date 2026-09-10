@@ -6,6 +6,7 @@ import {
   resolveAutoCompactRatio,
 } from './proma-runtime-compaction'
 import { DEFAULT_CONTEXT_WINDOW } from '@proma/shared'
+import { piCompactionSettings } from '../../../../resources/pi-runtime/workers/pi-compaction-settings.mjs'
 
 function channelWith(
   modelId: string,
@@ -39,6 +40,24 @@ function channelWith(
 }
 
 describe('Proma Runtime 模型压缩策略计算', () => {
+  test.each([
+    [0, 160_000],
+    [0.01, 20],
+    [70, 140_000],
+    [80, 160_000],
+    [100, 199_998],
+  ])('Given 比例 %s When 执行与显示读取同一策略 Then 阈值与 Worker 实际预留预算一致', (modelRatio, expectedThreshold) => {
+    const policy = compactionFor(channelWith('fixture', 'custom', {
+      contextWindow: 200_000, modelRatio,
+    }), 'fixture')!
+    const native = piCompactionSettings(200_000, {
+      enabled: true, threshold: Math.round(200_000 * modelRatio / 100),
+    })
+    expect(policy.threshold).toBe(expectedThreshold)
+    expect(policy.threshold).toBe(200_000 - native.reserveTokens)
+    expect(policy.enabled).toBe(native.enabled)
+  })
+
   test('Given 模型未配置压缩占比 When 解析占比 Then 返回 undefined 由默认值兜底', () => {
     expect(resolveAutoCompactRatio(channelWith('claude-test', 'anthropic'), 'claude-test'))
       .toBeUndefined()

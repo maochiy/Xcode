@@ -30,6 +30,7 @@ function hashChannelCatalog(
       provider: channel.provider,
       defaultModel,
       models: channel.models,
+      autoCompactRatio: channel.autoCompactRatio,
       includeDisabledModels,
     }))
     .digest('hex')

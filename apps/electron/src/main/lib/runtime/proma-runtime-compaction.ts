@@ -8,6 +8,7 @@
 
 import type { Channel, RuntimeModelRoute } from '@proma/shared'
 import { DEFAULT_CONTEXT_WINDOW } from '@proma/shared'
+import { resolvePiCompactionPolicy } from '../../../../resources/pi-runtime/workers/pi-compaction-settings.mjs'
 
 /** 默认压缩阈值比例：上下文窗口的 80%。 */
 export const DEFAULT_AUTO_COMPACT_RATIO = 0.8
@@ -45,5 +46,6 @@ export function compactionFor(
   if (!contextWindow) return undefined
   const ratio = resolveAutoCompactRatio(channel, modelId) ?? DEFAULT_AUTO_COMPACT_RATIO * 100
   const threshold = Math.round(contextWindow * ratio / 100)
-  return { enabled: true, threshold, contextWindow }
+  // 使用 Worker 相同的边界规则：0 沿用默认阈值，100% 至少为摘要预留两个 token。
+  return resolvePiCompactionPolicy(contextWindow, { enabled: true, threshold })
 }

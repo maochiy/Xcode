@@ -39,7 +39,8 @@ export const selectAgentModelAtom = atom(null, (get, set, selection: AgentModelS
   }
   const states = get(agentStreamingStatesAtom)
   const state = states.get(sessionId)
-  if (state?.contextWindow !== undefined) {
+  // 选模只改变后续配置；当前轮运行、后台等待及停止收尾期间保留原模型的上下文统计。
+  if (state?.contextWindow !== undefined && !state.running && !state.backgroundWaiting && !state.stopping) {
     set(agentStreamingStatesAtom, new Map(states).set(sessionId, { ...state, contextWindow: undefined }))
   }
   set(agentChannelIdAtom, channelId)

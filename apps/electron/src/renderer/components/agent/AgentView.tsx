@@ -149,7 +149,7 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { upsertAgentSession } from '@/lib/agent-session-list'
-import type { AgentRuntimeModelInfo, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, SDKUserMessage } from '@proma/shared'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, SDKUserMessage } from '@proma/shared'
 import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
@@ -158,7 +158,7 @@ import { canSwitchAgentProject } from '@/lib/agent-project-switch'
 import { getEffectivePermissionMode } from '@/lib/agent-plan-mode'
 import {
   derivePersistedAgentContextUsage,
-  resolveAgentContextPolicy,
+  resolveAgentContextStatus,
 } from '@/lib/agent-context-usage'
 import {
   findAgentRuntimeModel,
@@ -212,17 +212,9 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
   return message
 }
 
-function resolveRunContextWindow(
-  modelInfo: AgentRuntimeModelInfo | undefined,
-  previous: number | undefined,
-): number | undefined {
-  return modelInfo?.contextWindow ?? previous
-}
-
 /** 新 Turn 只重置流式展示字段，保留当前会话的上下文用量和 Runtime 压缩配置。 */
 function preserveAgentContextState(
   previous: AgentStreamState | undefined,
-  contextWindow = previous?.contextWindow,
 ): Partial<AgentStreamState> {
   return {
     inputTokens: previous?.inputTokens,
@@ -233,7 +225,7 @@ function preserveAgentContextState(
     cumulativeCacheReadTokens: previous?.cumulativeCacheReadTokens,
     cumulativeCacheCreationTokens: previous?.cumulativeCacheCreationTokens,
     costUsd: previous?.costUsd,
-    contextWindow,
+    contextWindow: previous?.contextWindow,
     contextUsageIsEstimated: previous?.contextUsageIsEstimated,
     autoCompactEnabled: previous?.autoCompactEnabled,
     autoCompactThreshold: previous?.autoCompactThreshold,
@@ -474,7 +466,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!restored) return
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
-      if (current?.running) return prev
+      if (current?.running || current?.backgroundWaiting || current?.stopping || current?.isCompacting) return prev
       const map = new Map(prev)
       map.set(sessionId, {
         running: false,
@@ -672,6 +664,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             && existing?.runtimeVersion === catalog.runtimeVersion
             && existing?.defaultModel === catalog.defaultModel
             && JSON.stringify(existing.models) === JSON.stringify(catalog.models)
+            && JSON.stringify(existing.contextPolicy) === JSON.stringify(catalog.contextPolicy)
           ) {
             return previous
           }
@@ -758,26 +751,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         : undefined,
     [agentChannelId, currentWorkspaceId, runtimeModelCatalogs],
   )
-  const selectedContextPolicy = React.useMemo(
-    () => resolveAgentContextPolicy(selectedRuntimeCatalog, agentModelId),
-    [agentModelId, selectedRuntimeCatalog],
+  const contextStatus = resolveAgentContextStatus(
+    sessionContextStatus,
+    selectedRuntimeCatalog,
+    agentModelId,
+    streaming || backgroundWaiting || stopping || sessionContextStatus.isCompacting,
   )
-  const contextStatus: AgentContextStatus = {
-    ...sessionContextStatus,
-    contextWindow:
-      selectedContextPolicy?.contextWindow
-      ?? sessionContextStatus.contextWindow
-      ?? selectedRuntimeModel?.contextWindow,
-    autoCompactEnabled:
-      selectedRuntimeCatalog?.contextPolicy.autoCompactEnabled
-      ?? sessionContextStatus.autoCompactEnabled,
-    autoCompactThreshold:
-      selectedContextPolicy?.autoCompactThreshold
-      ?? sessionContextStatus.autoCompactThreshold,
-    effectiveContextWindow:
-      selectedContextPolicy?.effectiveContextWindow
-      ?? sessionContextStatus.effectiveContextWindow,
-  }
+  // 只在新一轮建立时捕获选定策略；选模、立即发送均不改正在执行的轮次。
+  const preserveNextRunContextState = React.useCallback(
+    (previous: AgentStreamState | undefined) => resolveAgentContextStatus(
+      { ...preserveAgentContextState(previous), isCompacting: false },
+      selectedRuntimeCatalog,
+      agentModelId,
+      false,
+    ),
+    [selectedRuntimeCatalog, agentModelId],
+  )
   const thinkingEffortCapability = React.useMemo(
     () => resolveAgentThinkingEffortCapability(selectedRuntimeModel),
     [selectedRuntimeModel],
@@ -1138,7 +1127,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         turnStartedAt: streamStartedAt,
-        ...preserveAgentContextState(existing),
+        ...preserveNextRunContextState(existing),
       })
       return map
     })
@@ -1197,6 +1186,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     runtimeThinking,
     sessionId,
     selectedBrowserAnnotations,
+    preserveNextRunContextState,
     setStreamingStates,
     store,
   ])
@@ -1474,10 +1464,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           toolActivities: [],
           model: snapshot.modelId,
           startedAt: streamStartedAt,
-          ...preserveAgentContextState(
-            existing,
-            resolveRunContextWindow(selectedRuntimeModel, existing?.contextWindow),
-          ),
+          ...preserveNextRunContextState(existing),
         })
         return map
       })
@@ -1521,7 +1508,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, selectedRuntimeModel, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, effectivePermissionMode, runtimeThinking, attachedDirs, attachedFileDirectories])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, preserveNextRunContextState, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, effectivePermissionMode, runtimeThinking, attachedDirs, attachedFileDirectories])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -2022,11 +2009,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    if (streaming || backgroundWaiting) {
-      toast.info('Agent 运行中，完成后再切换模型')
-      return
-    }
-
     if (!selectAgentModel({
       sessionId,
       channelId: option.channelId,
@@ -2049,10 +2031,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       console.error('[AgentView] 实时更新 Runtime 模型失败:', error)
     })
   }, [
-    backgroundWaiting,
     sessionId,
     selectAgentModel,
-    streaming,
   ])
 
   /**
@@ -2415,10 +2395,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
-        ...preserveAgentContextState(
-          existing,
-          resolveRunContextWindow(selectedRuntimeModel, existing?.contextWindow),
-        ),
+        ...preserveNextRunContextState(existing),
       })
       return map
     })
@@ -2471,7 +2448,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, sessionId, agentChannelId, agentModelId, selectedRuntimeModel, currentWorkspaceId, runtimeThinking, streaming, backgroundWaiting, stopping, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, effectivePermissionMode, messagesLoaded, referenceableSessionIds, sendImmediateMessage, setAgentSessions, selectedBrowserAnnotations])
+  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, sessionId, agentChannelId, agentModelId, preserveNextRunContextState, currentWorkspaceId, runtimeThinking, streaming, backgroundWaiting, stopping, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, effectivePermissionMode, messagesLoaded, referenceableSessionIds, sendImmediateMessage, setAgentSessions, selectedBrowserAnnotations])
 
   /** 停止生成 */
   const stopActiveRun = React.useCallback(async (): Promise<void> => {
@@ -2678,10 +2655,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toolActivities: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
-        ...preserveAgentContextState(
-          existing,
-          resolveRunContextWindow(selectedRuntimeModel, existing?.contextWindow),
-        ),
+        ...preserveNextRunContextState(existing),
       })
       return map
     })
@@ -2700,7 +2674,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ...(retryOfErrorUuid && { retryOfErrorUuid }),
     }
     window.electronAPI.sendAgentMessage(input).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, selectedRuntimeModel, currentWorkspaceId, runtimeThinking, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, effectivePermissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, preserveNextRunContextState, currentWorkspaceId, runtimeThinking, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, effectivePermissionMode])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -3166,7 +3140,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         models={runtimeModelOptions}
         selectedModel={externalSelectedModel}
         loading={runtimeModelsLoading}
-        modelSwitchDisabled={streaming || backgroundWaiting}
+        modelSwitchDisabled={false}
         capability={thinkingEffortCapability}
         effortLevel={effectiveThinkingEffortLevel}
         onModelSelect={handleModelSelect}

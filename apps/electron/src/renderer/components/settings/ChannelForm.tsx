@@ -780,7 +780,8 @@ export function ChannelForm({
           ...model,
           thinkingEffortLevels: normalizeConfiguredThinkingEffortLevels(model.thinkingEffortLevels),
         })),
-        ...(autoCompactRatio !== undefined ? { autoCompactRatio } : {}),
+        // 显式保留 undefined，让编辑保存能清除旧比例并恢复默认值。
+        autoCompactRatio,
         defaultModelId: defaultModelId || undefined,
         enabled,
       }
