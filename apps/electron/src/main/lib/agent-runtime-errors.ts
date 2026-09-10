@@ -9,7 +9,7 @@ import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from './error-pat
 const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /not logged in|please run \/login/i,
-    message: '请检查是否选择了正确的 Xcode 供应渠道和模型',
+    message: '请检查是否选择了正确的 Xcodes 供应渠道和模型',
   },
   {
     pattern: /validation error/i,
@@ -311,7 +311,7 @@ export function mapSDKErrorToTypedError(
     message: detailedMessage || errorCode,
     canRetry: false,
   }
-  const isInvalidChannelOrModel = /请检查是否选择了正确的 Xcode 供应渠道和模型/.test(mapped.message)
+  const isInvalidChannelOrModel = /请检查是否选择了正确的 Xcodes 供应渠道和模型/.test(mapped.message)
 
   return {
     code: mapped.code,

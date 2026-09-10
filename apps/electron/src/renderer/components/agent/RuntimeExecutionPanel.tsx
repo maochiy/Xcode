@@ -93,7 +93,7 @@ export function RuntimeExecutionPanel({
         <div>
           <h3 className="text-xs font-semibold">子智能体</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            由 Pi 执行的 Xcode 协作任务
+            由 Pi 执行的 Xcodes 协作任务
           </p>
         </div>
         <Button

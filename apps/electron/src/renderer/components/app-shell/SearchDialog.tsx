@@ -361,7 +361,7 @@ export function SearchDialog(): React.ReactElement {
     const channelId = deepseekChannel?.id ?? currentAgentChannelId ?? undefined
 
     const configDir = getConfigDirectoryName(import.meta.env.DEV)
-    const prompt = `请帮我在 Xcode 的全部会话历史中搜索与以下描述相关的内容：
+    const prompt = `请帮我在 Xcodes 的全部会话历史中搜索与以下描述相关的内容：
 
 "${q}"
 
@@ -519,7 +519,7 @@ export function SearchDialog(): React.ReactElement {
           <button
             onClick={() => void handleAgentSearch()}
             disabled={trimmedQuery.length < 2}
-            title="适合在精准搜索找不到的情况下使用，Agent 会帮助你搜索整个 Xcode 会话空间"
+            title="适合在精准搜索找不到的情况下使用，Agent 会帮助你搜索整个 Xcodes 会话空间"
             className={cn(
               'flex items-center gap-1 px-2 py-1 rounded text-[12px] font-medium transition-colors',
               trimmedQuery.length >= 2

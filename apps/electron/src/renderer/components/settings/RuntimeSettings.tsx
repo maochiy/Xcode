@@ -109,8 +109,8 @@ export function RuntimeSettings(): React.ReactElement {
   return (
     <div className="space-y-6">
       <SettingsSection
-        title="Xcode Runtime 中心"
-        description="Xcode 仅使用 Pi 作为执行内核。历史 Hermes、Codex 与 Claude Runtime 标识只用于兼容读取，不再作为可选或可执行项。"
+        title="Xcodes Runtime 中心"
+        description="Xcodes 仅使用 Pi 作为执行内核。历史 Hermes、Codex 与 Claude Runtime 标识只用于兼容读取，不再作为可选或可执行项。"
         action={(
           <Button
             variant="outline"
@@ -159,7 +159,7 @@ export function RuntimeSettings(): React.ReactElement {
                   <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <CheckCircle2 className="size-3.5 text-emerald-500" />
                     <span>
-                      版本：{runtime.installation.version || '随 Xcode 内置适配器'}
+                      版本：{runtime.installation.version || '随 Xcodes 内置适配器'}
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
@@ -182,7 +182,7 @@ export function RuntimeSettings(): React.ReactElement {
 
       <SettingsSection
         title="统一运行时能力"
-        description="Runtime 复用 Xcode 现有模型中心、系统提示词、Profile、Memory、Skills、MCP 和右侧浏览器上下文。"
+        description="Runtime 复用 Xcodes 现有模型中心、系统提示词、Profile、Memory、Skills、MCP 和右侧浏览器上下文。"
       >
         <div className="grid gap-4 md:grid-cols-3">
           <SettingsCard className="p-4">

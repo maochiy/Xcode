@@ -340,7 +340,7 @@ export function BrowserPanel({ sessionId, taskId, initialUrl }: { sessionId: str
       </div>
 
       <div className="flex shrink-0 items-center gap-1 border-t border-border/30 px-3 py-1 text-[10px] text-muted-foreground">
-        <ShieldCheck className="size-3 text-emerald-500" /> Xcode Browser 安全隔离已启用
+        <ShieldCheck className="size-3 text-emerald-500" /> Xcodes Browser 安全隔离已启用
       </div>
     </div>
   )

@@ -1,5 +1,5 @@
 /**
- * 校验安装包是否包含随 Xcode 分发的内置 Runtime。
+ * 校验安装包是否包含随 Xcodes 分发的内置 Runtime。
  *
  * Pi 必须在安装时即可用，不能依赖用户 PATH 中的 `pi`。
  */
@@ -10,7 +10,7 @@ import type { ElectronBuilderPlatform } from './packaged-cli-guard'
 export function resolvePackagedResourcesRoot(
   appOutDir: string,
   electronPlatformName: ElectronBuilderPlatform,
-  productName = 'xcodes',
+  productName = 'Xcodes',
 ): string {
   if (electronPlatformName === 'darwin') {
     return join(appOutDir, `${productName}.app`, 'Contents', 'Resources')
@@ -49,6 +49,6 @@ export function ensurePackagedBundledRuntimes(
     return BUNDLED_RUNTIME_FILES.map((item) => item.label)
   }
   throw new Error(
-    `安装包缺少内置 Runtime：${missing.map((item) => item.label).join('、')}。Pi 必须随 Xcode 安装包分发，不能依赖用户 PATH。`,
+    `安装包缺少内置 Runtime：${missing.map((item) => item.label).join('、')}。Pi 必须随 Xcodes 安装包分发，不能依赖用户 PATH。`,
   )
 }

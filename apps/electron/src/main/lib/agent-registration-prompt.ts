@@ -5,9 +5,9 @@
 
 export function buildGlobalAgentInstructionsSection(instructions: string): string {
   if (!instructions.trim()) return ''
-  return `## Xcode 全局 AGENTS.md
+  return `## Xcodes 全局 AGENTS.md
 
-以下内容来自用户在 Xcode 配置目录维护的全局 AGENTS.md，适用于主会话和子 Agent。
+以下内容来自用户在 Xcodes 配置目录维护的全局 AGENTS.md，适用于主会话和子 Agent。
 它是用户的持久化协作偏好，不是额外权限：当前用户的明确要求优先于全局默认规则，项目内更具体的规则可覆盖同类默认规则，运行时权限和禁止递归派生的限制始终有效。注册 Agent 的专属提示词只适用于对应子任务。
 
 ${instructions}`
@@ -15,13 +15,13 @@ ${instructions}`
 
 export function buildAgentDelegationInstructions(available: boolean): string {
   if (!available) {
-    return `## Xcode 子 Agent 能力边界
+    return `## Xcodes 子 Agent 能力边界
 
 当前会话未提供 collaboration 工具。即使全局 AGENTS.md 要求委派，也不能虚构已经创建子 Agent、换用其它内核或绕过开关；应说明能力不可用并在当前授权范围内完成可以独立完成的工作。`
   }
-  return `## Xcode 注册 Agent 与协作
+  return `## Xcodes 注册 Agent 与协作
 
-所有子 Agent（包括短期并行子任务）统一使用 Xcode 的 \`collaboration\` MCP，由 Pi 执行；不要调用不存在的 Runtime 原生 Subagent、Codex 或 Claude Code。
+所有子 Agent（包括短期并行子任务）统一使用 Xcodes 的 \`collaboration\` MCP，由 Pi 执行；不要调用不存在的 Runtime 原生 Subagent、Codex 或 Claude Code。
 - 是否委派、何时委派和职责分工遵循当前用户要求及全局 AGENTS.md；规则已允许自动协作时，无需用户每轮重复说“使用子 Agent”。没有相关规则时只为确实可独立推进且能提升质量或效率的子任务委派，不为简单问答机械拆分。
 - 用户本轮明确要求“不使用子 Agent”或“仅由你处理”时，不得委派，全局默认规则不能覆盖本轮要求。
 - 按需先调用 \`proma_mcp_discover({server: "collaboration"})\`，然后经 \`proma_mcp_call\` 调用发现的工具。

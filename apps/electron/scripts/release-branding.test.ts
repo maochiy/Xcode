@@ -6,22 +6,22 @@ import { APP_DISPLAY_NAME } from '../src/main/lib/app-branding'
 const appDirectory = resolve(import.meta.dir, '..')
 const repositoryUrl = 'https://github.com/maochiy/Xcode'
 
-describe('Xcode 发布入口', () => {
-  test('Given 用户选择 Xcode When 读取应用与打包元数据 Then 显示名不变且安装产物使用 xcodes', () => {
+describe('Xcodes 发布入口', () => {
+  test('Given 用户确认名称为 Xcodes When 读取应用与打包元数据 Then 显示名与安装产物大小写一致', () => {
     const metadata = JSON.parse(readFileSync(resolve(appDirectory, 'package.json'), 'utf8')) as {
       productName: string
       homepage: string
       repository: { url: string }
     }
-    expect(APP_DISPLAY_NAME).toBe('Xcode')
+    expect(APP_DISPLAY_NAME).toBe('Xcodes')
     expect(metadata.productName).toBe(APP_DISPLAY_NAME)
     expect(metadata.homepage).toBe(repositoryUrl)
     expect(metadata.repository.url).toBe(`${repositoryUrl}.git`)
     const builder = readFileSync(resolve(appDirectory, 'electron-builder.yml'), 'utf8')
-    expect(builder).toContain('productName: Xcode')
-    expect(builder).toContain('executableName: xcodes')
-    expect(builder).toContain('artifactName: xcodes-${version}-mac-${arch}.${ext}')
-    expect(builder).toContain('artifactName: xcodes-${version}-windows-${arch}.${ext}')
+    expect(builder).toContain('productName: Xcodes')
+    expect(builder).toContain('executableName: Xcodes')
+    expect(builder).toContain('artifactName: Xcodes-${version}-mac-${arch}.${ext}')
+    expect(builder).toContain('artifactName: Xcodes-${version}-windows-${arch}.${ext}')
     expect(builder).toContain('owner: maochiy')
     expect(builder).toContain('repo: Xcode')
   })

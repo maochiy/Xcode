@@ -27,7 +27,7 @@ describe('afterPack 入口（proma CLI 与 Pi Runtime 守卫）', () => {
         electronPlatformName: 'darwin',
         packager: {
           appInfo: {
-            productFilename: 'xcodes',
+            productFilename: 'Xcodes',
           },
         },
       }),
@@ -35,7 +35,7 @@ describe('afterPack 入口（proma CLI 与 Pi Runtime 守卫）', () => {
   })
 
   test('Given darwin 目标 When 解析 CLI 路径 Then 使用应用资源目录', () => {
-    expect(resolvePackagedCliPath('/out', 'darwin')).toContain('xcodes.app')
+    expect(resolvePackagedCliPath('/out', 'darwin')).toContain('Xcodes.app')
   })
 
   test('Given context 提供实际 Bundle 名 When afterPack Then 动态使用该名称', () => {

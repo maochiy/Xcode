@@ -1,5 +1,5 @@
 /**
- * 从唯一 SVG 母版生成 Xcode 的桌面、托盘和品牌素材。
+ * 从唯一 SVG 母版生成 Xcodes 的桌面、托盘和品牌素材。
  * 使用项目已有 Electron 渲染，无需安装 ImageMagick / librsvg。
  * 保留既有品牌素材路径和颜色 ID，兼容素材下载与预览入口。
  */
@@ -131,7 +131,7 @@ async function generate() {
   } else {
     console.warn('[图标] ICNS 需要在 macOS 上重新生成。')
   }
-  console.log('[图标] Xcode 应用、托盘及 14 款配色素材生成完成。')
+  console.log('[图标] Xcodes 应用、托盘及 14 款配色素材生成完成。')
 }
 
 app.whenReady().then(generate).then(() => setImmediate(() => app.quit())).catch((error) => {

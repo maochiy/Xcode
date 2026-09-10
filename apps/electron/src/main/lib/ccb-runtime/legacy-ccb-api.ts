@@ -5,5 +5,5 @@
  * 启动 runtime-client utilityProcess。
  */
 export function createLegacyCcbUnsupportedError(feature: string): Error {
-  return new Error(`旧 CCB ${feature} 已停用；Xcode 仅支持 Pi Runtime`)
+  return new Error(`旧 CCB ${feature} 已停用；Xcodes 仅支持 Pi Runtime`)
 }

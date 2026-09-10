@@ -23,7 +23,7 @@ describe('Pi-only 主进程入口', () => {
 
   test('Given 历史 CCB API 被调用 When 返回错误 Then 明确提示仅支持 Pi', () => {
     expect(createLegacyCcbUnsupportedError('原生模型配置').message)
-      .toBe('旧 CCB 原生模型配置 已停用；Xcode 仅支持 Pi Runtime')
+      .toBe('旧 CCB 原生模型配置 已停用；Xcodes 仅支持 Pi Runtime')
   })
 
   test('Given Anthropic 与 OpenAI OAuth 渠道 When 构建模型目录 Then 只读取当前渠道模型且不需要凭证', () => {

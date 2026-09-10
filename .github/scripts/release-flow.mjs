@@ -13,8 +13,8 @@ import {
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const EXPECTED_PRODUCT_NAME = 'Xcode'
-const INSTALL_ARTIFACT_NAME = 'xcodes'
+const EXPECTED_PRODUCT_NAME = 'Xcodes'
+const INSTALL_ARTIFACT_NAME = 'Xcodes'
 const EXPECTED_REPOSITORY = 'maochiy/Xcode'
 
 function fail(message) {

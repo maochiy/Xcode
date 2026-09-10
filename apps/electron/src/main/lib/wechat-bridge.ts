@@ -840,7 +840,7 @@ class WeChatBridge {
     // 确保 binding 存在，保存媒体到会话目录
     const binding = this.commandHandler.ensureBinding(chatId)
     if (!binding) {
-      await this.client.sendText(chatId, '请先在 Xcode 设置中选择 Agent 渠道。', contextToken)
+      await this.client.sendText(chatId, '请先在 Xcodes 设置中选择 Agent 渠道。', contextToken)
       return
     }
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined

@@ -62,7 +62,7 @@ export function AgentWelcomeScreen({
     >
       <div className="w-full max-w-[720px] pb-12">
         <div className="flex flex-col items-center text-center">
-          <img src={xcodesIcon} alt="Xcode" className="size-12" draggable={false} />
+          <img src={xcodesIcon} alt="Xcodes" className="size-12" draggable={false} />
 
           <h1
             id={titleId}

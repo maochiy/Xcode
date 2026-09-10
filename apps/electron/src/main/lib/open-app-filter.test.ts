@@ -5,6 +5,7 @@ describe('isEditorLikeApp', () => {
   test('Given 应用改名为 Xcode When 判断打开方式 Then 排除应用自身并保留 Xcode 编辑器', () => {
     expect(isEditorLikeApp('Xcode', '/Applications/Xcode-Desktop.app')).toBe(false)
     expect(isEditorLikeApp('Xcode', '/Applications/xcodes.app')).toBe(false)
+    expect(isEditorLikeApp('Xcodes', '/Applications/Xcodes.app')).toBe(false)
     expect(isEditorLikeApp('xcodes', '')).toBe(false)
     expect(isEditorLikeApp('Proma', '/Applications/Proma.app')).toBe(false)
     expect(isEditorLikeApp('Xcode', '/Applications/Xcode.app')).toBe(true)

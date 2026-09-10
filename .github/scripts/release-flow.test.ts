@@ -9,7 +9,7 @@ import {
   verifyAssetNames,
 } from './release-flow.mjs'
 
-const builderConfig = `productName: Xcode
+const builderConfig = `productName: Xcodes
 publish:
   provider: github
   owner: maochiy
@@ -22,7 +22,7 @@ describe('release flow', () => {
       validateReleaseConfig({
         tag: 'v0.0.1',
         repository: 'maochiy/Xcode',
-        packageJson: { version: '0.0.1', productName: 'Xcode' },
+        packageJson: { version: '0.0.1', productName: 'Xcodes' },
         builderConfig,
       }),
     ).toBe('0.0.1')
@@ -31,7 +31,7 @@ describe('release flow', () => {
       validateReleaseConfig({
         tag: 'v0.0.2',
         repository: 'maochiy/Xcode',
-        packageJson: { version: '0.0.1', productName: 'Xcode' },
+        packageJson: { version: '0.0.1', productName: 'Xcodes' },
         builderConfig,
       }),
     ).toThrow('tag 与应用版本不一致')
@@ -55,11 +55,11 @@ describe('release flow', () => {
 
     const macManifest = readFileSync(join(assetsDir, 'latest-mac.yml'), 'utf8')
     expect(macManifest).toContain('version: 0.0.1')
-    expect(macManifest).toContain('xcodes-0.0.1-mac-arm64.zip')
-    expect(macManifest).toContain('xcodes-0.0.1-mac-x64.zip')
+    expect(macManifest).toContain('Xcodes-0.0.1-mac-arm64.zip')
+    expect(macManifest).toContain('Xcodes-0.0.1-mac-x64.zip')
 
     const windowsManifest = readFileSync(join(assetsDir, 'latest.yml'), 'utf8')
-    expect(windowsManifest).toContain('xcodes-0.0.1-windows-x64.exe')
+    expect(windowsManifest).toContain('Xcodes-0.0.1-windows-x64.exe')
   })
 
   test('拒绝缺失或多余的远端资产', () => {
@@ -86,6 +86,8 @@ describe('release flow', () => {
       'needs: [validate-release, quality-check, build-macos, build-windows]',
     )
     expect(workflow).toContain('--draft')
+    expect(workflow).toContain('--title "Xcodes ${TAG}"')
+    expect(workflow).toContain('-F "name=Xcodes ${TAG}"')
     expect(workflow.indexOf('gh release create')).toBeLessThan(
       workflow.indexOf('gh release upload'),
     )

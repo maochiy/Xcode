@@ -1,4 +1,4 @@
-# GitHub Actions: Xcode 自动构建与发布
+# GitHub Actions: Xcodes 自动构建与发布
 #
 # 推送 v* tag（首版为 v0.0.1）后构建 macOS arm64、macOS x64 和 Windows x64。
 # 所有检查与构建成功后才创建 Draft Release；完整资产校验通过后再正式发布。
@@ -48,7 +48,7 @@ jobs:
           VERSION=$(node .github/scripts/release-flow.mjs validate-config \
             --tag "${RELEASE_TAG}" \
             --repository "${GITHUB_REPOSITORY}")
-          echo "✅ 发布配置校验通过: Xcode v${VERSION}"
+          echo "✅ 发布配置校验通过: Xcodes v${VERSION}"
 
   quality-check:
     name: 类型与发布流程测试
@@ -293,7 +293,7 @@ jobs:
             --repo "${REPO}"
             --verify-tag
             --draft
-            --title "Xcode ${TAG}"
+            --title "Xcodes ${TAG}"
           )
           NOTES_FILE=".github/release-notes/${TAG}.md"
           if [ -f "${NOTES_FILE}" ]; then
@@ -321,7 +321,7 @@ jobs:
             --file remote-assets.txt
 
           gh api --method PATCH "repos/${REPO}/releases/${RELEASE_ID}" \
-            -F "name=Xcode ${TAG}" \
+            -F "name=Xcodes ${TAG}" \
             -F draft=false \
             -F prerelease=false
 

@@ -14,11 +14,11 @@ function readPngSize(buffer: Buffer): [number, number] {
 
 describe('Xcode 品牌交付', () => {
   test('Given 应用改名 When 定位 macOS 内核与 CLI Then 使用独立 Bundle 且保留 CLI 协议名', () => {
-    const root = resolve('/output', 'xcodes.app', 'Contents', 'Resources')
+    const root = resolve('/output', 'Xcodes.app', 'Contents', 'Resources')
     expect(resolvePackagedResourcesRoot('/output', 'darwin')).toBe(root)
     expect(resolvePackagedCliPath('/output', 'darwin')).toBe(resolve(root, 'bin/proma'))
     const config = readFileSync(resolve(appDirectory, 'electron-builder.yml'), 'utf8')
-    expect(config).toContain('productName: Xcode')
+    expect(config).toContain('productName: Xcodes')
     expect(config).toContain('appId: com.proma.app')
     expect(config).toContain('ext: proma-backup')
     expect(config).toContain('ext: proma-share')
@@ -26,7 +26,7 @@ describe('Xcode 品牌交付', () => {
       productName: string
       name: string
     }
-    expect(pkg.productName).toBe('Xcode')
+    expect(pkg.productName).toBe('Xcodes')
     expect(pkg.name).toBe('@proma/electron')
   })
 

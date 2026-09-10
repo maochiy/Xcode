@@ -1,4 +1,4 @@
-<svg width="1024" height="1024" viewBox="112 112 288 288" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Xcode">
+<svg width="1024" height="1024" viewBox="112 112 288 288" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Xcodes">
   <!-- 已确认的石墨黑 · 圆润交叉方案；保留透明外沿，适配桌面 Dock。 -->
   <path id="mark" d="M172 169C213 199 227 225 256 256S305 317 340 343M340 169C299 199 285 225 256 256S207 317 172 343" fill="none" stroke="#2D2E2B" stroke-width="61" stroke-linecap="round"/>
 </svg>

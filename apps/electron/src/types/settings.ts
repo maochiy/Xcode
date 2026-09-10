@@ -243,7 +243,7 @@ export interface AppSettings {
   autoCleanupArchivedDays?: number
   /**
    * Agent 代创建 git commit / PR 时是否附加 Proma 推广标识。
-   * 默认 true：commit trailer `Made-with: Xcode`，PR body 末尾含 https://github.com/maochiy/Xcode。
+   * 默认 true：commit trailer `Made-with: Xcodes`，PR body 末尾含 https://github.com/maochiy/Xcode。
    * 关闭后不注入任何 Proma 归因，并覆盖 CCB 默认 Co-Authored-By。
    */
   gitAttributionEnabled?: boolean

@@ -79,15 +79,15 @@ export function NewApiLoginView({
           <h1 className="max-w-lg text-4xl font-semibold tracking-tight text-foreground">
             登录 OpenSwitch，
             <br />
-            开始使用 Xcode
+            开始使用 Xcodes
           </h1>
           <p className="mt-5 max-w-md text-base leading-7 text-muted-foreground">
-            使用你的 OpenSwitch 账号或 API Key 登录，继续使用 Xcode。
+            使用你的 OpenSwitch 账号或 API Key 登录，继续使用 Xcodes。
           </p>
 
           <div className="mt-10 space-y-4">
             <Feature icon={LockKeyhole} title="凭据本地保护" description="账号密码不会保存，API Key 使用系统安全存储加密。" />
-            <Feature icon={Server} title="登录即可使用" description="完成身份验证后即可进入 Xcode 主界面。" />
+            <Feature icon={Server} title="登录即可使用" description="完成身份验证后即可进入 Xcodes 主界面。" />
           </div>
         </section>
 
@@ -156,7 +156,7 @@ export function NewApiLoginView({
                   </div>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  登录成功后，Xcode 会为当前设备创建专属 API Key，账号密码不会保存在本地。
+                  登录成功后，Xcodes 会为当前设备创建专属 API Key，账号密码不会保存在本地。
                 </p>
               </>
             ) : (

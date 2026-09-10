@@ -77,7 +77,7 @@ function registerLazyBuiltin(
 ): void {
   const manifestDefinition = getBuiltinMcpById(registration.id)
   const serverName = getBuiltinMcpName(registration.id)
-  const description = manifestDefinition?.description ?? `Xcode 内置 MCP：${serverName}`
+  const description = manifestDefinition?.description ?? `Xcodes 内置 MCP：${serverName}`
 
   ctx.mcpServers[serverName] = createLazyBuiltinMcpServerDefinition({
     name: serverName,

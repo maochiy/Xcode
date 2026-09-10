@@ -94,7 +94,7 @@ const BOTS_TAB: TabItem = {
 };
 const TUTORIAL_TAB: TabItem = {
   id: "tutorial",
-  label: "Xcode 教程",
+  label: "Xcodes 教程",
   icon: <GraduationCap size={16} />,
 };
 const SHORTCUTS_TAB: TabItem = {
@@ -118,7 +118,7 @@ const TAIL_TABS: TabItem[] = [
 
 const TAB_GROUPS: TabGroup[] = [
   {
-    label: "Xcode",
+    label: "Xcodes",
     tabs: BASE_TABS,
   },
   {
@@ -217,7 +217,7 @@ export function SettingsPanel({
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */
   const handleTabChange = (tabId: SettingsTab): void => {
     if (tabId === 'tutorial') {
-      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Xcode 使用教程' })
+      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Xcodes 使用教程' })
       setMainTabs(result.tabs)
       setMainActiveTabId(result.activeTabId)
       // Skills/Automations 会全屏覆盖 TabContent；打开教程时先清理表单并回到会话视图。

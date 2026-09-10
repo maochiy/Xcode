@@ -2194,9 +2194,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         }}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle>确认从 Xcode 移除项目</AlertDialogTitle>
+          <AlertDialogTitle>确认从 Xcodes 移除项目</AlertDialogTitle>
           <AlertDialogDescription>
-            将移除「{pendingDeleteWorkspace?.name ?? '该项目'}」在 Xcode 中的会话、自动任务、MCP、Skills 和私有配置。用户电脑上的原项目目录及其中所有文件都会保留。
+            将移除「{pendingDeleteWorkspace?.name ?? '该项目'}」在 Xcodes 中的会话、自动任务、MCP、Skills 和私有配置。用户电脑上的原项目目录及其中所有文件都会保留。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -2696,7 +2696,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 <UserAvatar avatar={userProfile.avatar} size={30} />
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{userProfile.userName}</div>
-                  <div className="text-[11px] text-muted-foreground">Xcode 用户</div>
+                  <div className="text-[11px] text-muted-foreground">Xcodes 用户</div>
                 </div>
               </div>
               <DropdownMenuSeparator />

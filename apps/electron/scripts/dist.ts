@@ -161,7 +161,7 @@ function main(): void {
   const results: StepResult[] = []
 
   // 打印配置信息
-  console.log(`\n${color.bgBlue}${color.bold} Xcode 打包工具 ${color.reset}\n`)
+  console.log(`\n${color.bgBlue}${color.bold} Xcodes 打包工具 ${color.reset}\n`)
   console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
   console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : 'arm64 + x64'}`)
   console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
@@ -289,7 +289,7 @@ function resolveAppOutDir(opts: DistOptions): string {
       ? [join(electronDir, 'out', `mac-${arch}`)]
       : [join(electronDir, 'out', `mac-${arch}`), join(electronDir, 'out', 'mac')]
     for (const dir of candidates) {
-      if (existsSync(join(dir, 'xcodes.app'))) return dir
+      if (existsSync(join(dir, 'Xcodes.app'))) return dir
     }
     throw new Error(`未找到 mac 打包产物目录（尝试: ${candidates.join(', ')}）`)
   }

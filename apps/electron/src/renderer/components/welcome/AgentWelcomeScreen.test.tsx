@@ -5,7 +5,7 @@ import { AgentWelcomeScreen } from './AgentWelcomeScreen'
 describe('AgentWelcomeScreen Agent 新首屏', () => {
   test('Given 用户打开首屏 When 渲染品牌 Then 使用带石墨背景的确认版图标以兼容深浅主题', () => {
     const html = renderToStaticMarkup(<AgentWelcomeScreen />)
-    expect(html).toContain('alt="Xcode"')
+    expect(html).toContain('alt="Xcodes"')
     expect(html).toContain('xcodes-icon.svg')
     expect(html).not.toContain('xcodes-mark.svg')
   })

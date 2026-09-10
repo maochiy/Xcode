@@ -9,6 +9,21 @@ const { SettingsPanel } = await import('./SettingsPanel')
 Reflect.deleteProperty(globalThis, '__APP_VERSION__')
 
 describe('设置页面导航', () => {
+  test('Given 打开设置 When 查看品牌入口 Then 使用 Xcodes 精确命名', () => {
+    const store = createStore()
+    store.set(settingsTabAtom, 'general')
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <SettingsPanel />
+      </Provider>,
+    )
+
+    expect(html).toContain('Xcodes 教程')
+    expect(html).toContain('>Xcodes</div>')
+    expect(html).not.toContain('Xcode 教程')
+  })
+
   test('Given 打开设置 When 查看导航 Then 外观设置紧跟通用设置且只出现一次', () => {
     const store = createStore()
     store.set(settingsTabAtom, 'general')

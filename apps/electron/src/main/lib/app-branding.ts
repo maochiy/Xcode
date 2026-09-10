@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 
-export const APP_DISPLAY_NAME = 'Xcode'
+export const APP_DISPLAY_NAME = 'Xcodes'
 
 const LEGACY_PRODUCTION_USER_DATA_DIRECTORY = 'Proma'
 const DEVELOPMENT_USER_DATA_DIRECTORY = '@proma/electron-dev'

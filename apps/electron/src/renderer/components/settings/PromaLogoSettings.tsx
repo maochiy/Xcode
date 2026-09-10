@@ -52,7 +52,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
   {
     id: 'black',
     name: '石墨黑',
-    description: 'Xcode 默认品牌色，圆润交叉 X',
+    description: 'Xcodes 默认品牌色，圆润交叉 X',
     src: promaBlackLogo,
     resourcePath: 'proma-logos/proma-black.png',
     previewBg: 'bg-[#2D2E2B]',
@@ -219,7 +219,7 @@ export function PromaLogoSettings(): React.ReactElement {
     <>
       <SettingsSection
         title="品牌 Logo"
-        description="下载 Xcode Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
+        description="下载 Xcodes Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
       >
         <div className="grid grid-cols-3 gap-4">
           {LOGO_VARIANTS.map((logo) => (

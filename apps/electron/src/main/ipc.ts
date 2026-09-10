@@ -4953,7 +4953,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: '选择迁移文件',
       filters: [
-        { name: 'Xcode 迁移文件', extensions: ['proma-backup', 'proma-share'] },
+        { name: 'Xcodes 迁移文件', extensions: ['proma-backup', 'proma-share'] },
         { name: '所有文件', extensions: ['*'] },
       ],
       properties: ['openFile'],
@@ -4969,7 +4969,7 @@ export function registerIpcHandlers(): void {
       title: '保存迁移文件',
       defaultPath: defaultName,
       filters: [
-        { name: mode === 'personal' ? 'Xcode 个人备份' : 'Xcode 分享包', extensions: [ext] },
+        { name: mode === 'personal' ? 'Xcodes 个人备份' : 'Xcodes 分享包', extensions: [ext] },
       ],
     })
     return result.canceled ? null : result.filePath

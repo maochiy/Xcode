@@ -42,7 +42,7 @@ function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   if (server.id === 'chrome-devtools') {
     return {
       source: 'Chrome DevTools MCP / npx',
-      description: '启用后 Xcode 会通过 npx 启动 chrome-devtools-mcp，让 Agent 可以打开真实浏览器页面、截图和检查 DOM。首次使用可能需要下载 npm 包，并要求本机安装 Chrome。',
+      description: '启用后 Xcodes 会通过 npx 启动 chrome-devtools-mcp，让 Agent 可以打开真实浏览器页面、截图和检查 DOM。首次使用可能需要下载 npm 包，并要求本机安装 Chrome。',
     }
   }
   if (server.id === 'collaboration') {
@@ -53,13 +53,13 @@ function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   }
   if (server.id === 'automation') {
     return {
-      source: 'Xcode 本地自动任务',
-      description: '自动任务 MCP 直接使用 Xcode 本地任务服务，无需填写额外凭据。',
+      source: 'Xcodes 本地自动任务',
+      description: '自动任务 MCP 直接使用 Xcodes 本地任务服务，无需填写额外凭据。',
     }
   }
   return {
-    source: 'Xcode 运行时',
-    description: '该内置 MCP 由 Xcode 运行时托管。',
+    source: 'Xcodes 运行时',
+    description: '该内置 MCP 由 Xcodes 运行时托管。',
   }
 }
 

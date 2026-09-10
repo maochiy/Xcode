@@ -417,7 +417,7 @@ class DingTalkBridge {
 
     const binding = this.commandHandler.ensureBinding(chatId)
     if (!binding) {
-      await this.replyTextViaWebhook(data.sessionWebhook, '请先在 Xcode 设置中选择 Agent 渠道。')
+      await this.replyTextViaWebhook(data.sessionWebhook, '请先在 Xcodes 设置中选择 Agent 渠道。')
       return
     }
     const workspace = getAgentWorkspace(binding.workspaceId)

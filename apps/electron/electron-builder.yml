@@ -2,7 +2,7 @@
 # 文档: https://www.electron.build/configuration/configuration
 
 appId: com.proma.app
-productName: Xcode
+productName: Xcodes
 copyright: Copyright © 2024-2026 Erlich Liu
 
 # Electron 版本（CI 环境 bun workspace 下无法自动检测，需显式指定）
@@ -119,9 +119,9 @@ extraResources:
 # macOS 配置
 # ============================================
 mac:
-  # 安装后的 Bundle 文件名固定为小写 xcodes.app；显示名称仍为 Xcode。
-  executableName: xcodes
-  artifactName: xcodes-${version}-mac-${arch}.${ext}
+  # 安装后的 Bundle 文件名固定为 Xcodes.app；显示名称统一为 Xcodes。
+  executableName: Xcodes
+  artifactName: Xcodes-${version}-mac-${arch}.${ext}
   category: public.app-category.developer-tools
   icon: resources/icon.icns
   hardenedRuntime: true
@@ -129,13 +129,13 @@ mac:
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
   extendInfo:
-    NSMicrophoneUsageDescription: "Xcode 需要访问麦克风，用于将你的语音实时转写为文本。"
+    NSMicrophoneUsageDescription: "Xcodes 需要访问麦克风，用于将你的语音实时转写为文本。"
   fileAssociations:
     - ext: proma-backup
-      name: Xcode Personal Backup
+      name: Xcodes Personal Backup
       role: Editor
     - ext: proma-share
-      name: Xcode Share Package
+      name: Xcodes Share Package
       role: Editor
   # 架构由 CLI 参数控制（CI 矩阵分别传 --arm64 / --x64）。
   target:
@@ -159,14 +159,14 @@ dmg:
 # Windows 配置
 # ============================================
 win:
-  artifactName: xcodes-${version}-windows-${arch}.${ext}
+  artifactName: Xcodes-${version}-windows-${arch}.${ext}
   icon: resources/icon.ico
   fileAssociations:
     - ext: proma-backup
-      name: Xcode Personal Backup
+      name: Xcodes Personal Backup
       icon: resources/icon.ico
     - ext: proma-share
-      name: Xcode Share Package
+      name: Xcodes Share Package
       icon: resources/icon.ico
   target:
     - target: nsis

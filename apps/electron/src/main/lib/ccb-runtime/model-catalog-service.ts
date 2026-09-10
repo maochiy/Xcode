@@ -50,7 +50,7 @@ export async function resolveAgentRuntimeModelCatalog(
 
   const channel = getChannelById(channelId)
   if (!channel || !channel.enabled) {
-    throw new Error('Xcode Agent 渠道不存在或已禁用')
+    throw new Error('Xcodes Agent 渠道不存在或已禁用')
   }
 
   const fingerprint = hashChannelCatalog(channel, defaultModel)
